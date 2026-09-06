@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+backend/.venv/
+backend/.env
+backend/storage/recordings/*
+!backend/storage/recordings/.gitkeep
+backend/storage/snapshots/*
+!backend/storage/snapshots/.gitkeep
+*.pt
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.env
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Claude Code local session state
+.claude/

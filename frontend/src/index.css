@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-surface-950;
+  }
+  body {
+    @apply bg-surface-950 text-slate-200 font-sans antialiased;
+  }
+  ::selection {
+    @apply bg-accent-cyan/30 text-white;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-600 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-500;
+  }
+}
+
+@layer components {
+  .sc-card {
+    @apply bg-surface-900 border border-surface-700 rounded-xl shadow-lg;
+  }
+  .sc-input {
+    @apply w-full rounded-lg bg-surface-800 border border-surface-600 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-accent-cyan/60 focus:border-accent-cyan/60 transition;
+  }
+  .sc-label {
+    @apply block text-xs font-medium uppercase tracking-wide text-slate-400 mb-1.5;
+  }
+  .sc-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-accent-blue to-accent-cyan px-4 py-2 text-sm font-semibold text-slate-950 shadow-glow hover:brightness-110 active:brightness-95 transition disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .sc-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-surface-800 border border-surface-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-surface-700 hover:border-surface-500 transition disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .sc-btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-red-950/60 border border-red-900 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-900/50 hover:border-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .sc-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide;
+  }
+}
