@@ -59,9 +59,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 22: jsdom 30 (via vitest's jsdom environment) pulls in an undici
+      # that needs a newer Node than the 20.x the runner resolves - on Node 20
+      # every test file dies at import with
+      # "webidl.util.markAsUncloneable is not a function".
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
