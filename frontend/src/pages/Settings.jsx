@@ -82,8 +82,9 @@ export default function Settings() {
         <h2 className="mb-4 text-lg font-semibold text-slate-100">Change Email</h2>
         <form onSubmit={handleEmailSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="sc-label">New Email</label>
+            <label htmlFor="settings-new-email" className="sc-label">New Email</label>
             <input
+              id="settings-new-email"
               type="email"
               required
               className="sc-input"
@@ -93,8 +94,9 @@ export default function Settings() {
             />
           </div>
           <div>
-            <label className="sc-label">Current Password</label>
+            <label htmlFor="settings-email-current-password" className="sc-label">Current Password</label>
             <input
+              id="settings-email-current-password"
               type="password"
               required
               className="sc-input"
@@ -127,8 +129,9 @@ export default function Settings() {
         <h2 className="mb-4 text-lg font-semibold text-slate-100">Change Password</h2>
         <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="sc-label">Current Password</label>
+            <label htmlFor="settings-password-current-password" className="sc-label">Current Password</label>
             <input
+              id="settings-password-current-password"
               type="password"
               required
               className="sc-input"
@@ -139,8 +142,9 @@ export default function Settings() {
             />
           </div>
           <div>
-            <label className="sc-label">New Password</label>
+            <label htmlFor="settings-new-password" className="sc-label">New Password</label>
             <input
+              id="settings-new-password"
               type="password"
               required
               className="sc-input"
@@ -149,8 +153,9 @@ export default function Settings() {
             />
           </div>
           <div>
-            <label className="sc-label">Confirm New Password</label>
+            <label htmlFor="settings-confirm-new-password" className="sc-label">Confirm New Password</label>
             <input
+              id="settings-confirm-new-password"
               type="password"
               required
               className="sc-input"

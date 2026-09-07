@@ -36,8 +36,8 @@ export default function Analytics() {
           <p className="mt-1 text-sm text-slate-400">Operational metrics across cameras, alerts, and uploads.</p>
         </div>
         <div className="w-full max-w-[160px]">
-          <label className="sc-label">Window</label>
-          <select className="sc-input" value={days} onChange={(e) => setDays(Number(e.target.value))}>
+          <label htmlFor="analytics-window" className="sc-label">Window</label>
+          <select id="analytics-window" className="sc-input" value={days} onChange={(e) => setDays(Number(e.target.value))}>
             {WINDOW_OPTIONS.map((d) => (
               <option key={d} value={d}>
                 Last {d} days

@@ -101,8 +101,8 @@ export default function Alerts() {
 
       <div className="mb-6 flex flex-wrap gap-4">
         <div className="w-full max-w-xs">
-          <label className="sc-label">Event Type</label>
-          <select className="sc-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <label htmlFor="alerts-event-type-filter" className="sc-label">Event Type</label>
+          <select id="alerts-event-type-filter" className="sc-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
             <option value="all">All Types</option>
             {eventTypes.map((t) => (
               <option key={t} value={t}>
@@ -112,8 +112,8 @@ export default function Alerts() {
           </select>
         </div>
         <div className="w-full max-w-xs">
-          <label className="sc-label">Status</label>
-          <select className="sc-input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <label htmlFor="alerts-status-filter" className="sc-label">Status</label>
+          <select id="alerts-status-filter" className="sc-input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="all">All</option>
             <option value="unacknowledged">Unacknowledged</option>
             <option value="acknowledged">Acknowledged</option>

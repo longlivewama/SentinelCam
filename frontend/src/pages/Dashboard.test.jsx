@@ -33,6 +33,7 @@ describe('Dashboard page', () => {
     apiClient.get.mockImplementation((url) => {
       if (url === '/api/analytics/summary') return Promise.resolve({ data: SUMMARY })
       if (url === '/api/alerts') return Promise.resolve({ data: [] })
+      if (url === '/api/video-uploads') return Promise.resolve({ data: [] })
       return Promise.reject(new Error('unexpected url'))
     })
 
@@ -42,6 +43,60 @@ describe('Dashboard page', () => {
     expect(await screen.findByText('2/3')).toBeInTheDocument() // active/total cameras
     expect(screen.getByText('4')).toBeInTheDocument() // unacknowledged
     expect(screen.getByText('No alerts yet.')).toBeInTheDocument()
+    expect(screen.getByText(/no videos analyzed yet/i)).toBeInTheDocument()
+  })
+
+  it('lists recent analyses, flags the latest, and explains a failed one', async () => {
+    apiClient.get.mockImplementation((url) => {
+      if (url === '/api/analytics/summary') return Promise.resolve({ data: SUMMARY })
+      if (url === '/api/alerts') return Promise.resolve({ data: [] })
+      if (url === '/api/video-uploads') {
+        return Promise.resolve({
+          data: [
+            {
+              id: 2,
+              original_filename: 'newest.mp4',
+              status: 'completed',
+              progress_percent: 100,
+              fall_events_count: 1,
+              persons_detected: 2,
+              created_at: '2026-01-02T00:00:00Z',
+            },
+            {
+              id: 1,
+              original_filename: 'older.mp4',
+              status: 'failed',
+              progress_percent: 0,
+              error_message: 'Could not open uploaded video file',
+              fall_events_count: 0,
+              persons_detected: 0,
+              created_at: '2026-01-01T00:00:00Z',
+            },
+          ],
+        })
+      }
+      return Promise.reject(new Error('unexpected url'))
+    })
+
+    render(<MemoryRouter><Dashboard /></MemoryRouter>)
+
+    expect(await screen.findByText('newest.mp4')).toBeInTheDocument()
+    expect(screen.getByText('Latest')).toBeInTheDocument()
+    expect(screen.getByText(/1 fall/)).toBeInTheDocument()
+    expect(screen.getByText(/could not open uploaded video file/i)).toBeInTheDocument()
+  })
+
+  it('keeps the rest of the dashboard usable when the analyses request fails', async () => {
+    apiClient.get.mockImplementation((url) => {
+      if (url === '/api/analytics/summary') return Promise.resolve({ data: SUMMARY })
+      if (url === '/api/alerts') return Promise.resolve({ data: [] })
+      return Promise.reject(new Error('uploads unavailable'))
+    })
+
+    render(<MemoryRouter><Dashboard /></MemoryRouter>)
+
+    expect(await screen.findByText('2/3')).toBeInTheDocument() // summary still rendered
+    expect(screen.getByText(/could not load recent analyses/i)).toBeInTheDocument()
   })
 
   it('shows an error state when the summary request fails', async () => {

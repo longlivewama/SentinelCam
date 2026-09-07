@@ -77,6 +77,46 @@ jobs:
       - name: Build
         run: npm run build
 
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+
+      # Brings up postgres+mailpit+backend+frontend via docker compose,
+      # seeds fixture data, runs the suite, and tears the stack down again
+      # - see e2e/README.md. Same commands a developer runs locally.
+      # E2E_KEEP_STACK: this is an ephemeral CI runner either way, so skip
+      # the teardown and leave containers up for the log-dump step below.
+      - name: Run e2e suite
+        working-directory: e2e
+        env:
+          E2E_KEEP_STACK: "1"
+        run: npm test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs
+
   security:
     runs-on: ubuntu-latest
     steps:

@@ -34,7 +34,7 @@ FORGOT_PASSWORD_GENERIC_MESSAGE = "If an account with that email exists, a passw
     "/signup",
     response_model=TokenResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(rate_limit(5, 60))],
+    dependencies=[Depends(rate_limit(settings.AUTH_SIGNUP_MAX_REQUESTS, settings.AUTH_SIGNUP_WINDOW_SECONDS))],
 )
 def signup(payload: SignupRequest, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.email == payload.email).first()
@@ -56,7 +56,11 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)):
     return TokenResponse(access_token=token, token_type="bearer", user=UserOut.model_validate(user))
 
 
-@router.post("/login", response_model=TokenResponse, dependencies=[Depends(rate_limit(10, 60))])
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit(settings.AUTH_LOGIN_MAX_REQUESTS, settings.AUTH_LOGIN_WINDOW_SECONDS))],
+)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if user is None or not verify_password(payload.password, user.password_hash):
@@ -68,7 +72,12 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     return TokenResponse(access_token=token, token_type="bearer", user=UserOut.model_validate(user))
 
 
-@router.post("/forgot-password", dependencies=[Depends(rate_limit(5, 300))])
+@router.post(
+    "/forgot-password",
+    dependencies=[
+        Depends(rate_limit(settings.AUTH_FORGOT_PASSWORD_MAX_REQUESTS, settings.AUTH_FORGOT_PASSWORD_WINDOW_SECONDS))
+    ],
+)
 def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
     if user is not None and user.is_active:
@@ -85,7 +94,12 @@ def forgot_password(payload: ForgotPasswordRequest, db: Session = Depends(get_db
     return {"message": FORGOT_PASSWORD_GENERIC_MESSAGE}
 
 
-@router.post("/reset-password", dependencies=[Depends(rate_limit(10, 60))])
+@router.post(
+    "/reset-password",
+    dependencies=[
+        Depends(rate_limit(settings.AUTH_RESET_PASSWORD_MAX_REQUESTS, settings.AUTH_RESET_PASSWORD_WINDOW_SECONDS))
+    ],
+)
 def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
     token_hash = hash_reset_token(payload.token)
     reset_row = db.query(PasswordResetToken).filter(PasswordResetToken.token_hash == token_hash).first()
