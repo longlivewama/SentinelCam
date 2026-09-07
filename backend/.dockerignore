@@ -1,0 +1,14 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+storage/recordings/*
+!storage/recordings/.gitkeep
+storage/snapshots/*
+!storage/snapshots/.gitkeep
+storage/uploads/*
+!storage/uploads/.gitkeep
+tests/
+.pytest_cache/
+*.pt

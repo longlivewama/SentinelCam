@@ -46,8 +46,9 @@ export default function CameraForm({
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <div>
-        <label className="sc-label">Name</label>
+        <label htmlFor="camera-form-name" className="sc-label">Name</label>
         <input
+          id="camera-form-name"
           required
           className="sc-input"
           value={values.name}
@@ -56,8 +57,9 @@ export default function CameraForm({
         />
       </div>
       <div>
-        <label className="sc-label">Stream URL</label>
+        <label htmlFor="camera-form-url" className="sc-label">Stream URL</label>
         <input
+          id="camera-form-url"
           required
           className="sc-input"
           value={values.url}
@@ -67,8 +69,9 @@ export default function CameraForm({
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="sc-label">Camera Type</label>
+          <label htmlFor="camera-form-type" className="sc-label">Camera Type</label>
           <select
+            id="camera-form-type"
             className="sc-input"
             value={values.camera_type}
             onChange={(e) => update('camera_type', e.target.value)}
@@ -78,8 +81,9 @@ export default function CameraForm({
           </select>
         </div>
         <div>
-          <label className="sc-label">Location</label>
+          <label htmlFor="camera-form-location" className="sc-label">Location</label>
           <input
+            id="camera-form-location"
             className="sc-input"
             value={values.location}
             onChange={(e) => update('location', e.target.value)}
@@ -91,8 +95,9 @@ export default function CameraForm({
       {showStatusFields && (
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="sc-label">Status</label>
+            <label htmlFor="camera-form-status" className="sc-label">Status</label>
             <select
+              id="camera-form-status"
               className="sc-input"
               value={values.status}
               onChange={(e) => update('status', e.target.value)}
@@ -128,8 +133,9 @@ export default function CameraForm({
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="sc-label">Crowd Threshold</label>
+          <label htmlFor="camera-form-crowd-threshold" className="sc-label">Crowd Threshold</label>
           <input
+            id="camera-form-crowd-threshold"
             type="number"
             min="0"
             className="sc-input"
@@ -138,8 +144,9 @@ export default function CameraForm({
           />
         </div>
         <div>
-          <label className="sc-label">Abandoned Object (sec)</label>
+          <label htmlFor="camera-form-abandoned-seconds" className="sc-label">Abandoned Object (sec)</label>
           <input
+            id="camera-form-abandoned-seconds"
             type="number"
             min="0"
             className="sc-input"

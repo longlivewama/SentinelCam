@@ -6,9 +6,20 @@ import BarChart from '../components/BarChart'
 import { onRealtimeEvent } from '../lib/realtime'
 import { eventTypeMeta, formatDateTime } from '../lib/format'
 
+const RECENT_ANALYSES_LIMIT = 4
+
+const UPLOAD_STATUS_STYLES = {
+  completed: 'border-status-ok/30 bg-status-ok/10 text-status-ok',
+  processing: 'border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan',
+  pending: 'border-status-warn/30 bg-status-warn/10 text-status-warn',
+  failed: 'border-status-error/30 bg-status-error/10 text-status-error',
+}
+
 export default function Dashboard() {
   const [summary, setSummary] = useState(null)
   const [recentAlerts, setRecentAlerts] = useState([])
+  const [recentUploads, setRecentUploads] = useState([])
+  const [uploadsError, setUploadsError] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -28,11 +39,31 @@ export default function Dashboard() {
     }
   }
 
+  // Kept out of fetchData's Promise.all deliberately: the uploads list is
+  // supplementary, so failing to load it should degrade that one card
+  // rather than blanking the whole dashboard.
+  const fetchUploads = async () => {
+    setUploadsError('')
+    try {
+      const { data } = await apiClient.get('/api/video-uploads')
+      setRecentUploads(data)
+    } catch {
+      setUploadsError('Could not load recent analyses.')
+    }
+  }
+
   useEffect(() => {
     fetchData()
+    fetchUploads()
     const unsubscribe = onRealtimeEvent((event) => {
       if (event.type === 'alert.created' || event.type === 'camera.status') {
         fetchData()
+      } else if (event.type === 'upload.completed') {
+        fetchUploads()
+      } else if (event.type === 'upload.progress') {
+        setRecentUploads((prev) =>
+          prev.map((u) => (u.id === event.data.id ? { ...u, ...event.data } : u)),
+        )
       }
     })
     return unsubscribe
@@ -89,6 +120,63 @@ export default function Dashboard() {
             emptyLabel="No falls detected in this window."
           />
         </div>
+      </div>
+
+      <div className="sc-card mb-6 p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Recent analyses</h2>
+          <Link to="/upload" className="text-sm text-accent-cyan hover:underline">
+            Upload a video →
+          </Link>
+        </div>
+        {uploadsError ? (
+          <p className="py-8 text-center text-sm text-red-300">{uploadsError}</p>
+        ) : recentUploads.length === 0 ? (
+          <p className="py-8 text-center text-sm text-slate-500">
+            No videos analyzed yet. Upload one to get started.
+          </p>
+        ) : (
+          <div className="flex flex-col divide-y divide-surface-800">
+            {recentUploads.slice(0, RECENT_ANALYSES_LIMIT).map((upload, index) => (
+              <div key={upload.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-medium text-slate-200">
+                      {upload.original_filename}
+                    </p>
+                    {index === 0 && (
+                      <span className="sc-badge border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan">
+                        Latest
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500">{formatDateTime(upload.created_at)}</p>
+                  {upload.status === 'failed' && (
+                    <p className="mt-1 text-xs text-red-300">
+                      {upload.error_message || 'Analysis failed. Try uploading the file again.'}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  {upload.status === 'completed' && (
+                    <span className="text-xs text-slate-400">
+                      {upload.fall_events_count} fall{upload.fall_events_count === 1 ? '' : 's'} ·{' '}
+                      {upload.persons_detected} person{upload.persons_detected === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  {upload.status === 'processing' && (
+                    <span className="text-xs text-slate-400">{upload.progress_percent}%</span>
+                  )}
+                  <span
+                    className={`sc-badge border capitalize ${UPLOAD_STATUS_STYLES[upload.status] || ''}`}
+                  >
+                    {upload.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="sc-card p-5">

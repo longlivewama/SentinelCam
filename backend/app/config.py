@@ -32,6 +32,21 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # --- Auth rate limiting ---
+    # Sensitive unauthenticated endpoints are rate-limited per client IP
+    # (see core/rate_limit.py). The defaults below are the intended
+    # production values; they're configurable only so a test environment
+    # that drives many auth requests from a single IP (the e2e suite) can
+    # opt out. Do not relax these outside a test environment.
+    AUTH_SIGNUP_MAX_REQUESTS: int = 5
+    AUTH_SIGNUP_WINDOW_SECONDS: float = 60
+    AUTH_LOGIN_MAX_REQUESTS: int = 10
+    AUTH_LOGIN_WINDOW_SECONDS: float = 60
+    AUTH_FORGOT_PASSWORD_MAX_REQUESTS: int = 5
+    AUTH_FORGOT_PASSWORD_WINDOW_SECONDS: float = 300
+    AUTH_RESET_PASSWORD_MAX_REQUESTS: int = 10
+    AUTH_RESET_PASSWORD_WINDOW_SECONDS: float = 60
+
     # --- CORS ---
     # Comma-separated list of allowed origins for the frontend. Kept as a
     # plain string (see ALERT_RECIPIENTS below for why) rather than
@@ -58,6 +73,10 @@ class Settings(BaseSettings):
     # --- SMTP / alert email ---
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
+    # Most public mail providers (Gmail, etc.) require STARTTLS; some
+    # internal/local relays (e.g. a Mailpit/MailHog catcher used for local
+    # dev and e2e tests) don't support it at all - set to false for those.
+    SMTP_USE_TLS: bool = True
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM: str = "alerts@sentinelcam.local"

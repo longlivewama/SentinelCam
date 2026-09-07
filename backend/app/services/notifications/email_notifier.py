@@ -50,7 +50,8 @@ class EmailNotifier(Notifier):
 
         try:
             with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as server:
-                server.starttls()
+                if settings.SMTP_USE_TLS:
+                    server.starttls()
                 if settings.SMTP_USER:
                     server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
                 server.sendmail(settings.SMTP_FROM, recipients, message.as_string())

@@ -1,0 +1,81 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: sentinelcam
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinelcam}
+      POSTGRES_DB: sentinelcam
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinelcam"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Local SMTP catcher: emails sent by the backend (alerts, password
+  # reset) are caught here instead of actually being delivered anywhere.
+  # Web UI at http://localhost:8025 to read them; also used by the e2e
+  # suite (see e2e/README.md) to fetch the password-reset link.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_WEB_PORT:-8025}:8025"
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DATABASE_URL: postgresql://sentinelcam:${POSTGRES_PASSWORD:-sentinelcam}@postgres:5432/sentinelcam
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      NOTIFICATION_CHANNELS: email
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USE_TLS: "false"
+      SMTP_FROM: alerts@sentinelcam.local
+      ALERT_RECIPIENTS: ${ALERT_RECIPIENTS:-ops@example.com}
+      MODEL_DEVICE: cpu
+      # Auth rate limits. Defaults here are the production values; the e2e
+      # suite overrides them (see e2e/global-setup.js) because it drives
+      # many signups/logins from a single client IP.
+      AUTH_SIGNUP_MAX_REQUESTS: ${AUTH_SIGNUP_MAX_REQUESTS:-5}
+      AUTH_SIGNUP_WINDOW_SECONDS: ${AUTH_SIGNUP_WINDOW_SECONDS:-60}
+      AUTH_LOGIN_MAX_REQUESTS: ${AUTH_LOGIN_MAX_REQUESTS:-10}
+      AUTH_LOGIN_WINDOW_SECONDS: ${AUTH_LOGIN_WINDOW_SECONDS:-60}
+      AUTH_FORGOT_PASSWORD_MAX_REQUESTS: ${AUTH_FORGOT_PASSWORD_MAX_REQUESTS:-5}
+      AUTH_FORGOT_PASSWORD_WINDOW_SECONDS: ${AUTH_FORGOT_PASSWORD_WINDOW_SECONDS:-300}
+      AUTH_RESET_PASSWORD_MAX_REQUESTS: ${AUTH_RESET_PASSWORD_MAX_REQUESTS:-10}
+      AUTH_RESET_PASSWORD_WINDOW_SECONDS: ${AUTH_RESET_PASSWORD_WINDOW_SECONDS:-60}
+    volumes:
+      - recordings_data:/app/storage/recordings
+      - snapshots_data:/app/storage/snapshots
+      - uploads_data:/app/storage/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  recordings_data:
+  snapshots_data:
+  uploads_data:

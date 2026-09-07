@@ -68,8 +68,9 @@ export default function Recordings() {
 
       <div className="mb-6 flex flex-wrap gap-4">
         <div className="w-full max-w-xs">
-          <label className="sc-label">Camera</label>
+          <label htmlFor="recordings-camera-filter" className="sc-label">Camera</label>
           <select
+            id="recordings-camera-filter"
             className="sc-input"
             value={cameraFilter}
             onChange={(e) => setCameraFilter(e.target.value)}
@@ -83,8 +84,9 @@ export default function Recordings() {
           </select>
         </div>
         <div className="w-full max-w-xs">
-          <label className="sc-label">Event Type</label>
+          <label htmlFor="recordings-event-type-filter" className="sc-label">Event Type</label>
           <select
+            id="recordings-event-type-filter"
             className="sc-input"
             value={eventFilter}
             onChange={(e) => setEventFilter(e.target.value)}

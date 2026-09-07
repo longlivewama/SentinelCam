@@ -32,6 +32,14 @@ See the root `README.md` for full architecture notes; this file covers backend-s
    # GRANT ALL PRIVILEGES ON DATABASE sentinelcam TO sentinelcam;
    ```
 
+   If `sentinelcam` is a dedicated (non-superuser) role, also grant it `CREATEDB`:
+   `ALTER ROLE sentinelcam CREATEDB;` — one test
+   (`tests/test_alembic_migrations.py`) creates and drops a throwaway database to verify
+   `alembic upgrade head` actually works against a genuinely fresh database (this caught a real
+   bug: the schema previously only worked as an in-place upgrade of an already-existing
+   pre-Alembic database, and failed on a brand new one - see that test's docstring). Docker
+   Compose's Postgres user already has this by default.
+
 4. **Configure environment variables**
 
    ```bash

@@ -34,8 +34,9 @@ function AddUserForm({ onSubmit, onCancel }) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-4">
       <div>
-        <label className="sc-label">Full Name</label>
+        <label htmlFor="new-user-full-name" className="sc-label">Full Name</label>
         <input
+          id="new-user-full-name"
           required
           className="sc-input"
           value={form.full_name}
@@ -43,8 +44,9 @@ function AddUserForm({ onSubmit, onCancel }) {
         />
       </div>
       <div>
-        <label className="sc-label">Email</label>
+        <label htmlFor="new-user-email" className="sc-label">Email</label>
         <input
+          id="new-user-email"
           required
           type="email"
           className="sc-input"
@@ -53,8 +55,9 @@ function AddUserForm({ onSubmit, onCancel }) {
         />
       </div>
       <div>
-        <label className="sc-label">Password</label>
+        <label htmlFor="new-user-password" className="sc-label">Password</label>
         <input
+          id="new-user-password"
           required
           type="password"
           minLength={8}
@@ -64,8 +67,8 @@ function AddUserForm({ onSubmit, onCancel }) {
         />
       </div>
       <div>
-        <label className="sc-label">Role</label>
-        <select className="sc-input" value={form.role} onChange={(e) => update('role', e.target.value)}>
+        <label htmlFor="new-user-role" className="sc-label">Role</label>
+        <select id="new-user-role" className="sc-input" value={form.role} onChange={(e) => update('role', e.target.value)}>
           <option value="viewer">Viewer - read-only access</option>
           <option value="operator">Operator - manage cameras &amp; alerts</option>
           <option value="admin">Admin - full access incl. user management</option>
@@ -208,6 +211,7 @@ export default function AdminUsers() {
                         <span className={`sc-badge border capitalize ${ROLE_BADGE[user.role]}`}>{user.role}</span>
                       ) : (
                         <select
+                          aria-label={`Change role for ${user.email}`}
                           className="sc-input py-1 text-xs capitalize"
                           value={user.role}
                           disabled={busyId === user.id}
