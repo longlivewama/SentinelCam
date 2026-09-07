@@ -1,0 +1,7 @@
+# Downloaded source datasets - large, re-downloadable via the scripts.
+# The prepared train/val/test CSVs (derived, small, reproducible) and the
+# exported model + metadata (the actual deliverable) ARE committed.
+data/raw_simuletic/
+data/raw_coco_pose/
+__pycache__/
+*.pyc

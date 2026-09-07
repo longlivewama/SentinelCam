@@ -26,6 +26,7 @@ import cv2
 from app.config import settings
 from app.database import SessionLocal
 from app.models.camera import Camera
+from app.services.realtime import realtime_broadcaster
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,10 @@ class CameraStream:
                 if camera and camera.status != status:
                     camera.status = status
                     db.commit()
+                    realtime_broadcaster.publish(
+                        "camera.status",
+                        {"camera_id": self.camera_id, "camera_name": camera.name, "status": status},
+                    )
         except Exception:
             logger.exception("Failed to update status for camera %s", self.camera_id)
 

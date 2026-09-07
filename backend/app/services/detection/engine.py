@@ -36,6 +36,7 @@ from app.database import SessionLocal
 from app.models.camera import Camera
 from app.services import recording_engine
 from app.services.stream_manager import stream_manager
+from app.services.detection.fall_classifier import fall_classifier
 from app.services.detection.fall_detection import FallDetector
 from app.services.detection.violence_detection import ViolenceDetector
 from app.services.detection.crowd_detection import CrowdDetector
@@ -57,9 +58,17 @@ class DetectionEngine:
         self._threads: Dict[int, threading.Thread] = {}
         self._stop_flags: Dict[int, threading.Event] = {}
 
+    @property
+    def models_loaded(self) -> bool:
+        return self._pose_model is not None and self._object_model is not None
+
+    @property
+    def active_camera_count(self) -> int:
+        return sum(1 for t in self._threads.values() if t.is_alive())
+
     # -- model loading (once, shared across all cameras) -----------------
 
-    def _ensure_models(self):
+    def ensure_models(self):
         if self._pose_model is not None and self._object_model is not None:
             return
         with self._model_lock:
@@ -96,7 +105,7 @@ class DetectionEngine:
     # -- main loop -----------------------------------------------------
 
     def _run_loop(self, camera_id: int, stop_flag: threading.Event):
-        self._ensure_models()
+        self.ensure_models()
         stream = stream_manager.get(camera_id)
         if stream is None:
             logger.error("No stream for camera %s; detection loop exiting", camera_id)
@@ -144,9 +153,14 @@ class DetectionEngine:
         self, camera_id, frame, fall_detector, violence_detector,
         crowd_detector, abandoned_detector, crowd_threshold, abandoned_object_seconds,
     ):
-        people = self._extract_people(frame)
+        people = self.extract_people(frame)
 
-        for fall_event in fall_detector.update(people):
+        classifier_scores = None
+        if fall_classifier.is_available:
+            frame_height, frame_width = frame.shape[:2]
+            classifier_scores = fall_classifier.score_people(people, frame_width, frame_height)
+
+        for fall_event in fall_detector.update(people, classifier_scores=classifier_scores):
             logger.info("Camera %s: FALL detected %s", camera_id, fall_event)
             recording_engine.trigger_event(camera_id, "fall", fall_event.get("confidence", 1.0))
 
@@ -154,7 +168,7 @@ class DetectionEngine:
             logger.info("Camera %s: VIOLENCE detected %s", camera_id, violence_event)
             recording_engine.trigger_event(camera_id, "violence", violence_event.get("confidence", 1.0))
 
-        person_boxes, other_objects = self._extract_objects(frame)
+        person_boxes, other_objects = self.extract_objects(frame)
 
         crowd_event = crowd_detector.update(len(person_boxes), crowd_threshold)
         if crowd_event:
@@ -167,7 +181,7 @@ class DetectionEngine:
 
     # -- model inference helpers -----------------------------------------
 
-    def _extract_people(self, frame):
+    def extract_people(self, frame):
         results = self._pose_model.predict(frame, device=settings.MODEL_DEVICE, verbose=False)
         if not results:
             return []
@@ -183,7 +197,7 @@ class DetectionEngine:
             people.append(PersonDetection(bbox=tuple(box.tolist()), keypoints=[tuple(p) for p in kps.tolist()]))
         return people
 
-    def _extract_objects(self, frame):
+    def extract_objects(self, frame):
         results = self._object_model.predict(frame, device=settings.MODEL_DEVICE, verbose=False)
         person_boxes = []
         other_objects = []

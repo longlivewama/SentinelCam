@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react'
 import apiClient from '../api/client'
 import Modal from '../components/Modal'
+import { useAuthStore } from '../store/authStore'
+import { toast } from '../store/toastStore'
 import { formatDateTime } from '../lib/format'
 
+const ROLE_BADGE = {
+  admin: 'border-accent-blue/30 bg-accent-blue/10 text-accent-blue',
+  operator: 'border-status-ok/30 bg-status-ok/10 text-status-ok',
+  viewer: 'border-surface-600 bg-surface-800 text-slate-400',
+}
+
 function AddUserForm({ onSubmit, onCancel }) {
-  const [form, setForm] = useState({ email: '', password: '', full_name: '', is_admin: false })
+  const [form, setForm] = useState({ email: '', password: '', full_name: '', role: 'viewer' })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -49,20 +57,20 @@ function AddUserForm({ onSubmit, onCancel }) {
         <input
           required
           type="password"
+          minLength={8}
           className="sc-input"
           value={form.password}
           onChange={(e) => update('password', e.target.value)}
         />
       </div>
-      <label className="flex items-center gap-2 text-sm text-slate-300">
-        <input
-          type="checkbox"
-          checked={form.is_admin}
-          onChange={(e) => update('is_admin', e.target.checked)}
-          className="h-4 w-4 rounded border-surface-600 bg-surface-800 text-accent-cyan focus:ring-accent-cyan"
-        />
-        Grant admin privileges
-      </label>
+      <div>
+        <label className="sc-label">Role</label>
+        <select className="sc-input" value={form.role} onChange={(e) => update('role', e.target.value)}>
+          <option value="viewer">Viewer - read-only access</option>
+          <option value="operator">Operator - manage cameras &amp; alerts</option>
+          <option value="admin">Admin - full access incl. user management</option>
+        </select>
+      </div>
 
       {error && (
         <div className="rounded-lg border border-status-error/30 bg-status-error/10 px-3 py-2 text-sm text-red-300">
@@ -83,6 +91,7 @@ function AddUserForm({ onSubmit, onCancel }) {
 }
 
 export default function AdminUsers() {
+  const currentUser = useAuthStore((s) => s.user)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -95,7 +104,7 @@ export default function AdminUsers() {
     try {
       const { data } = await apiClient.get('/api/admin/users')
       setUsers(data)
-    } catch (err) {
+    } catch {
       setError('Failed to load users.')
     } finally {
       setLoading(false)
@@ -109,6 +118,7 @@ export default function AdminUsers() {
   const handleCreate = async (payload) => {
     await apiClient.post('/api/admin/users', payload)
     setShowAddModal(false)
+    toast.success('User created.')
     fetchUsers()
   }
 
@@ -118,7 +128,20 @@ export default function AdminUsers() {
       const { data } = await apiClient.put(`/api/admin/users/${user.id}/toggle`)
       setUsers((prev) => prev.map((u) => (u.id === user.id ? data : u)))
     } catch (err) {
-      setError('Failed to update user.')
+      toast.error(err?.response?.data?.detail || 'Failed to update user.')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const handleRoleChange = async (user, role) => {
+    setBusyId(user.id)
+    try {
+      const { data } = await apiClient.put(`/api/admin/users/${user.id}/role`, { role })
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? data : u)))
+      toast.success(`${user.email} is now ${role}.`)
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to change role.')
     } finally {
       setBusyId(null)
     }
@@ -130,8 +153,9 @@ export default function AdminUsers() {
     try {
       await apiClient.delete(`/api/admin/users/${user.id}`)
       setUsers((prev) => prev.filter((u) => u.id !== user.id))
+      toast.success('User deleted.')
     } catch (err) {
-      setError('Failed to delete user.')
+      toast.error(err?.response?.data?.detail || 'Failed to delete user.')
     } finally {
       setBusyId(null)
     }
@@ -141,8 +165,8 @@ export default function AdminUsers() {
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-100">Admin Users</h1>
-          <p className="mt-1 text-sm text-slate-400">Manage platform accounts and access.</p>
+          <h1 className="text-2xl font-bold text-slate-100">Users</h1>
+          <p className="mt-1 text-sm text-slate-400">Manage platform accounts, roles, and access.</p>
         </div>
         <button onClick={() => setShowAddModal(true)} className="sc-btn-primary">
           + Add User
@@ -157,66 +181,78 @@ export default function AdminUsers() {
 
       {loading ? (
         <div className="py-24 text-center text-slate-500">Loading users…</div>
+      ) : users.length === 0 ? (
+        <div className="sc-card py-24 text-center text-slate-500">No users found.</div>
       ) : (
         <div className="sc-card overflow-x-auto">
-          <table className="w-full min-w-[640px] text-left">
+          <table className="w-full min-w-[720px] text-left">
             <thead>
               <tr className="border-b border-surface-700 text-xs uppercase tracking-wide text-slate-500">
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Email</th>
-                <th className="px-4 py-3 font-medium">Admin</th>
+                <th className="px-4 py-3 font-medium">Role</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Created</th>
                 <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {users.map((user) => (
-                <tr key={user.id} className="border-b border-surface-800 last:border-b-0 hover:bg-surface-800/40">
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-200">{user.full_name}</td>
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-400">{user.email}</td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    {user.is_admin ? (
-                      <span className="sc-badge border border-accent-blue/30 bg-accent-blue/10 text-accent-blue">
-                        Admin
-                      </span>
-                    ) : (
-                      <span className="text-sm text-slate-500">—</span>
-                    )}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <button
-                      onClick={() => handleToggle(user)}
-                      disabled={busyId === user.id}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition disabled:opacity-50 ${
-                        user.is_active ? 'bg-status-ok/70' : 'bg-surface-600'
-                      }`}
-                      aria-label="Toggle active status"
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
-                          user.is_active ? 'translate-x-6' : 'translate-x-1'
+              {users.map((user) => {
+                const isSelf = user.id === currentUser?.id
+                return (
+                  <tr key={user.id} className="border-b border-surface-800 last:border-b-0 hover:bg-surface-800/40">
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-200">{user.full_name}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-400">{user.email}</td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      {isSelf ? (
+                        <span className={`sc-badge border capitalize ${ROLE_BADGE[user.role]}`}>{user.role}</span>
+                      ) : (
+                        <select
+                          className="sc-input py-1 text-xs capitalize"
+                          value={user.role}
+                          disabled={busyId === user.id}
+                          onChange={(e) => handleRoleChange(user, e.target.value)}
+                        >
+                          <option value="viewer">Viewer</option>
+                          <option value="operator">Operator</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <button
+                        onClick={() => handleToggle(user)}
+                        disabled={busyId === user.id || isSelf}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition disabled:opacity-50 ${
+                          user.is_active ? 'bg-status-ok/70' : 'bg-surface-600'
                         }`}
-                      />
-                    </button>
-                    <span className="ml-2 text-xs text-slate-400">
-                      {user.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-400">
-                    {formatDateTime(user.created_at)}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <button
-                      onClick={() => handleDelete(user)}
-                      disabled={busyId === user.id}
-                      className="sc-btn-danger px-3 py-1.5 text-xs"
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
+                        aria-label="Toggle active status"
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                            user.is_active ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                      <span className="ml-2 text-xs text-slate-400">
+                        {user.is_active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-400">
+                      {formatDateTime(user.created_at)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <button
+                        onClick={() => handleDelete(user)}
+                        disabled={busyId === user.id || isSelf}
+                        className="sc-btn-danger px-3 py-1.5 text-xs"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

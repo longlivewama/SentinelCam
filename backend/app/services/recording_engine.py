@@ -35,7 +35,8 @@ from app.database import SessionLocal
 from app.models.camera import Camera
 from app.models.event import Event
 from app.models.recording import Recording
-from app.services import email_service
+from app.services.notifications import notification_service
+from app.services.realtime import realtime_broadcaster
 from app.services.stream_manager import stream_manager
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ def _handle_event(camera_id: int, trigger_action: str, confidence_score: float):
         logger.exception("Failed to persist recording for camera %s event %s", camera_id, trigger_action)
 
 
-def _open_writer(path: str, width: int, height: int, fps: int):
+def open_writer(path: str, width: int, height: int, fps: int):
     """Try 'avc1' (H.264, browser-compatible) first; fall back to 'mp4v'
     if it fails to open. Whether avc1 is available depends entirely on the
     OpenCV/ffmpeg build in the deployment environment - many stock
@@ -114,7 +115,7 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
     filename = f"{ts_str}_{trigger_action}.mp4"
     file_path = camera_dir / filename
 
-    codec_used, writer = _open_writer(str(file_path), width, height, fps)
+    codec_used, writer = open_writer(str(file_path), width, height, fps)
     if writer is None:
         logger.error("Could not open VideoWriter with any codec for %s", file_path)
         return
@@ -152,9 +153,11 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
             event_timestamp=event_timestamp,
         )
         db.add(recording)
+        db.flush()  # assigns recording.id without a full commit
 
         event = Event(
             camera_id=camera_id,
+            recording_id=recording.id,
             event_type=trigger_action,
             confidence_score=confidence_score,
             timestamp=event_timestamp,
@@ -162,13 +165,28 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
         )
         db.add(event)
         db.commit()
+        db.refresh(event)
+        db.refresh(recording)
 
         camera = db.query(Camera).filter(Camera.id == camera_id).first()
         camera_name = camera.name if camera else f"camera-{camera_id}"
 
-    email_service.send_alert_email(
+        realtime_broadcaster.publish(
+            "alert.created",
+            {
+                "id": event.id,
+                "camera_id": camera_id,
+                "camera_name": camera_name,
+                "recording_id": recording.id,
+                "event_type": trigger_action,
+                "confidence_score": confidence_score,
+                "timestamp": event_timestamp,
+            },
+        )
+
+    notification_service.notify_alert(
         event_type=trigger_action,
-        camera_name=camera_name,
+        source_name=camera_name,
         timestamp=event_timestamp,
         snapshot_path=str(snapshot_path),
     )

@@ -18,9 +18,9 @@ from dotenv import load_dotenv
 
 load_dotenv()  # so ADMIN_EMAIL / ADMIN_PASSWORD in .env are picked up, same as app.config does for its own settings
 
-from app.database import Base, SessionLocal, engine
-from app.core.security import hash_password
-from app.models.user import User
+from app.database import Base, SessionLocal, engine  # noqa: E402
+from app.core.security import hash_password  # noqa: E402
+from app.models.user import ROLE_ADMIN, User  # noqa: E402
 
 
 def _prompt_email() -> str:
@@ -61,8 +61,8 @@ def main():
         existing = db.query(User).filter(User.email == email).first()
         if existing is not None:
             changed = False
-            if not existing.is_admin:
-                existing.is_admin = True
+            if existing.role != ROLE_ADMIN:
+                existing.role = ROLE_ADMIN
                 changed = True
             if not existing.is_active:
                 existing.is_active = True
@@ -78,7 +78,7 @@ def main():
             email=email,
             password_hash=hash_password(password),
             full_name=full_name,
-            is_admin=True,
+            role=ROLE_ADMIN,
             is_active=True,
         )
         db.add(user)

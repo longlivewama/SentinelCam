@@ -1,0 +1,6 @@
+# ML pipeline dependencies. Reuses backend/venv (torch + numpy are already
+# installed there via ultralytics) plus scikit-learn for metrics/splitting
+# and onnx/onnxruntime for export + export verification.
+scikit-learn==1.5.2
+onnx==1.17.0
+onnxruntime==1.19.2

@@ -8,7 +8,9 @@ class Recording(Base):
     __tablename__ = "recordings"
 
     id = Column(Integer, primary_key=True, index=True)
-    camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=False, index=True)
+    camera_id = Column(Integer, ForeignKey("cameras.id"), nullable=True, index=True)
+    video_upload_id = Column(Integer, ForeignKey("video_uploads.id"), nullable=True, index=True)
+
     filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     duration_seconds = Column(Float, nullable=False, default=0.0)

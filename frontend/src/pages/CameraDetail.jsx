@@ -22,7 +22,7 @@ function statusStyle(status) {
 export default function CameraDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const isAdmin = useAuthStore((s) => s.isAdmin())
+  const isOperator = useAuthStore((s) => s.isOperator())
   const token = useAuthStore((s) => s.token)
 
   const [camera, setCamera] = useState(null)
@@ -43,7 +43,7 @@ export default function CameraDetail() {
       ])
       setCamera(cameraRes.data)
       setRecordings(recordingsRes.data)
-    } catch (err) {
+    } catch {
       setError('Failed to load camera details.')
     } finally {
       setLoading(false)
@@ -67,7 +67,7 @@ export default function CameraDetail() {
     try {
       await apiClient.delete(`/api/cameras/${id}`)
       navigate('/cameras', { replace: true })
-    } catch (err) {
+    } catch {
       setError('Failed to delete camera.')
       setDeleting(false)
     }
@@ -115,7 +115,7 @@ export default function CameraDetail() {
           </div>
           <div className="flex items-center gap-2">
             <span className={`sc-badge border ${statusStyle(camera.status)}`}>{camera.status}</span>
-            {isAdmin && (
+            {isOperator && (
               <>
                 <button onClick={() => setShowEditModal(true)} className="sc-btn-secondary">
                   Edit

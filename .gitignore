@@ -9,7 +9,11 @@ backend/storage/recordings/*
 !backend/storage/recordings/.gitkeep
 backend/storage/snapshots/*
 !backend/storage/snapshots/.gitkeep
-*.pt
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+# Auto-downloaded YOLO weights (backend/*.pt only - ml/exported/*.pt is a
+# deliberately-committed small training artifact, see ml/.gitignore).
+/backend/*.pt
 
 # Node / frontend
 node_modules/

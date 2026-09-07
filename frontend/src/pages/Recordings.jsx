@@ -24,7 +24,7 @@ export default function Recordings() {
         ])
         setRecordings(recordingsRes.data)
         setCameras(camerasRes.data)
-      } catch (err) {
+      } catch {
         setError('Failed to load recordings.')
       } finally {
         setLoading(false)
