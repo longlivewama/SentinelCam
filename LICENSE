@@ -1,0 +1,38 @@
+MIT License
+
+Copyright (c) 2026 SentinelCam contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+THIRD-PARTY NOTICES
+
+This project depends on and integrates with third-party software and data that
+carry their own licence terms, which are NOT granted by the MIT licence above:
+
+  * Ultralytics YOLOv8 (ultralytics) is distributed under AGPL-3.0. Using it in
+    a networked service can impose source-availability obligations. Review the
+    Ultralytics licensing terms, or obtain their commercial licence, before any
+    commercial deployment.
+  * Model weights auto-downloaded at runtime (e.g. yolov8n.pt, yolov8n-pose.pt)
+    are governed by their publisher's terms.
+  * Training datasets referenced by ml/ are not redistributed in this
+    repository and remain subject to the licences of their original sources
+    (see ml/README.md).
