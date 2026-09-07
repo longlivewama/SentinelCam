@@ -20,6 +20,15 @@ node_modules/
 frontend/dist/
 frontend/.env
 
+# Docker Compose overrides (root-level .env, see .env.example)
+/.env
+
+# Playwright E2E
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/.auth/
+
 # OS
 .DS_Store
 
@@ -29,3 +38,32 @@ frontend/.env
 
 # Claude Code local session state
 .claude/
+
+# --- Secrets: never commit any real .env, but keep the documented examples ---
+.env
+.env.local
+.env.*.local
+!.env.example
+!**/.env.example
+
+# --- Python tooling caches ---
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# --- ML artifacts: large, regenerable, and owned by the training pipeline ---
+# Auto-downloaded YOLO base weights (repo root). ml/exported/*.pt is a small,
+# deliberately-committed deliverable and is NOT matched by this rule.
+/*.pt
+# Prepared fall-detection dataset (rebuild via ml/detector/prepare_dataset.py)
+/ml/data/fall_detection_prepared/
+# Detector training runs, checkpoints, logs and dataset sample renders
+/ml/runs/
+/ml/logs/
+/ml/reports/dataset_samples/
+
+# --- Misc ---
+*.log
+Thumbs.db
