@@ -129,17 +129,17 @@ flowchart TB
         RBAC["JWT auth + RBAC<br/>+ rate limiting"]
     end
 
-    subgraph workers["Processing (background threads)"]
+    subgraph workers["Processing — background threads"]
         STREAM["Stream manager<br/>one capture thread per camera"]
         UPLOAD["Video analysis worker<br/>frame-by-frame single pass"]
-        DET["Detection engine<br/>YOLOv8-Pose → FallDetector<br/>(+ optional ONNX classifier)"]
+        DET["Detection engine<br/>YOLOv8-Pose → FallDetector<br/>+ optional ONNX classifier"]
         REC["Recording engine<br/>pre/post-event clip writer"]
     end
 
     subgraph data["Persistence & delivery"]
         DB[("PostgreSQL<br/>SQLAlchemy + Alembic")]
         FS[["Clip / snapshot storage"]]
-        MAIL["Notification service<br/>EmailNotifier (SMTP)"]
+        MAIL["Notification service<br/>EmailNotifier over SMTP"]
     end
 
     CAM["IP / USB cameras"] --> STREAM
@@ -626,5 +626,5 @@ setup, coding conventions, commit-message format and the checks a pull request m
 Released under the [MIT License](LICENSE).
 
 Third-party models and datasets carry their own licences — in particular, Ultralytics YOLOv8 is
-AGPL-3.0 licensed, and the fall-detection dataset is governed by the terms of its Roboflow
-export. Review those separately before any commercial use.
+AGPL-3.0 licensed, and the fall-detection dataset is governed by the terms of its Roboflow export.
+See [NOTICE.md](NOTICE.md) and review those terms separately before any commercial use.
