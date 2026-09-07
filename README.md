@@ -317,7 +317,8 @@ Recordings, snapshots and uploads persist in named Docker volumes across restart
 
 ## Local development (without Docker)
 
-**Prerequisites:** Python 3.11+, Node 20+, a local PostgreSQL server.
+**Prerequisites:** Python 3.11+, Node 20.18+ (Node 22 recommended — jsdom 30 needs a recent
+Node to run the frontend tests), and a local PostgreSQL server.
 
 ```bash
 # 1. Databases
@@ -457,7 +458,8 @@ backend — it produces model artifacts the backend can optionally load. Two tra
 
 | Artifact | In Git? | Why |
 |---|---|---|
-| All training, preparation and analysis **source code** | ✅ | The reproducible part |
+| Keypoint-classifier training, evaluation and export **source code** | ✅ | The reproducible part |
+| YOLO detector pipeline source (`ml/detector/`) | ⏳ | Lands with the completed training run |
 | Exported keypoint classifier (`ml/exported/*.onnx`, `*.pt`, metadata) | ✅ | Small, and the actual deliverable |
 | Training **datasets** (`ml/data/…`) | ❌ | Large and redistributable only under their own licences — re-fetch with the download scripts |
 | Training **runs & checkpoints** (`ml/runs/`) | ❌ | Large binaries; a selected artifact gets promoted to `ml/exported/` instead |
@@ -465,7 +467,10 @@ backend — it produces model artifacts the backend can optionally load. Two tra
 | Auto-downloaded YOLO base weights (`*.pt` at repo root) | ❌ | Fetched on demand by Ultralytics |
 
 So: **the trained YOLO fall-detector weights are intentionally not distributed here.** Reproduce
-them with the scripts in `ml/detector/`, or point the backend at your own artifact.
+them with the scripts in `ml/detector/`, or point the backend at your own artifact. That detector
+pipeline is under active development and lands in this repository together with the results of its
+first full training run — the section above describes design decisions already made and measured,
+not code you can run from a fresh clone today.
 See [`ml/README.md`](ml/README.md) for the full methodology, dataset licences, split strategy and
 evaluation discussion.
 
