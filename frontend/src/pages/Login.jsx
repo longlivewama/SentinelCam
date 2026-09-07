@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import apiClient from '../api/client'
 import { useAuthStore } from '../store/authStore'
 
@@ -18,7 +18,7 @@ export default function Login() {
     try {
       const { data } = await apiClient.post('/api/auth/login', { email, password })
       login(data.access_token, data.user)
-      navigate('/cameras', { replace: true })
+      navigate('/dashboard', { replace: true })
     } catch (err) {
       if (err.response && err.response.status === 401) {
         setError('Invalid email or password.')
@@ -98,6 +98,15 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
+
+        <div className="mt-6 flex items-center justify-between text-sm">
+          <Link to="/forgot-password" className="text-slate-400 hover:text-accent-cyan">
+            Forgot password?
+          </Link>
+          <Link to="/signup" className="text-slate-400 hover:text-accent-cyan">
+            Create an account →
+          </Link>
+        </div>
       </div>
     </div>
   )

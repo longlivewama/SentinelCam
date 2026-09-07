@@ -20,6 +20,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # --- Environment ---
+    ENVIRONMENT: str = "development"  # "development" | "production" | "test"
+
     # --- Database ---
     DATABASE_URL: str = "postgresql://sentinelcam:sentinelcam@localhost:5432/sentinelcam"
 
@@ -27,6 +30,30 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-me-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = 24
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # --- CORS ---
+    # Comma-separated list of allowed origins for the frontend. Kept as a
+    # plain string (see ALERT_RECIPIENTS below for why) rather than
+    # List[str] so a plain .env file doesn't need JSON syntax.
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000"
+
+    @property
+    def cors_origins(self) -> List[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    # --- Frontend (used to build links in emails, e.g. password reset) ---
+    FRONTEND_URL: str = "http://localhost:5173"
+
+    # --- Notifications ---
+    # Comma-separated list of enabled channels. "email" works out of the
+    # box; "sms"/"whatsapp" are architectural stubs (see
+    # services/notifications/sms_notifier.py) until a real provider is wired in.
+    NOTIFICATION_CHANNELS: str = "email"
+
+    @property
+    def notification_channels(self) -> List[str]:
+        return [c.strip() for c in self.NOTIFICATION_CHANNELS.split(",") if c.strip()]
 
     # --- SMTP / alert email ---
     SMTP_HOST: str = "smtp.gmail.com"
@@ -48,6 +75,21 @@ class Settings(BaseSettings):
     # --- Storage ---
     RECORDINGS_DIR: str = str(BASE_DIR / "storage" / "recordings")
     SNAPSHOTS_DIR: str = str(BASE_DIR / "storage" / "snapshots")
+    UPLOADS_DIR: str = str(BASE_DIR / "storage" / "uploads")
+
+    # --- Video upload ---
+    MAX_UPLOAD_SIZE_MB: int = 500
+    ALLOWED_VIDEO_EXTENSIONS: str = ".mp4,.mov,.avi,.mkv,.webm"
+
+    @property
+    def allowed_video_extensions(self) -> List[str]:
+        return [e.strip().lower() for e in self.ALLOWED_VIDEO_EXTENSIONS.split(",") if e.strip()]
+
+    # How many frames to skip between processed frames when analyzing an
+    # uploaded video (independent of live-camera DETECTION_FRAME_STRIDE,
+    # since uploaded video is processed as fast as possible rather than in
+    # real time).
+    VIDEO_ANALYSIS_FRAME_STRIDE: int = 5
 
     # --- Models ---
     YOLO_POSE_MODEL: str = "yolov8n-pose.pt"
@@ -58,6 +100,12 @@ class Settings(BaseSettings):
     # (CNN+LSTM / 3D-CNN trained on RWF-2000) for violence detection in
     # production. Unused by the current MVP heuristic implementation.
     VIOLENCE_MODEL_PATH: str = ""
+
+    # Hook for the trained fall classifier exported by ml/export.py (see
+    # ml/README.md). When set to an existing file, fall_detection.py uses
+    # it as a corroborating signal alongside the pose heuristic. Left
+    # empty, fall detection runs on the heuristic alone.
+    FALL_CLASSIFIER_MODEL_PATH: str = ""
 
     # --- Streaming / recording ---
     STREAM_FPS: int = 30

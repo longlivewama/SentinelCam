@@ -1,0 +1,72 @@
+{
+  "model_file": "fall_classifier_v1.onnx",
+  "exported_at": "2026-09-06T18:04:23.391434+00:00",
+  "framework": "pytorch->onnx (opset 17)",
+  "architecture": "MLP: 10 -> 16 (ReLU) -> 8 (ReLU) -> 1 (sigmoid)",
+  "input": {
+    "name": "features",
+    "shape": [
+      "batch",
+      10
+    ],
+    "dtype": "float32",
+    "description": "10 keypoint-derived geometric features computed from one person's YOLOv8-Pose 17-keypoint output + bbox. See scripts/features.py::extract_features for the exact computation and scripts/features.py::FEATURE_NAMES for the order.",
+    "preprocessing": "Standardize each feature with (x - feature_mean[i]) / feature_std[i] BEFORE calling the model. feature_mean/feature_std are the train-set statistics saved in fall_classifier_v1.pt (also duplicated below for convenience) - do NOT refit these at inference time.",
+    "feature_mean": [
+      0.806239664554596,
+      0.30263805389404297,
+      0.15447962284088135,
+      0.168961301445961,
+      0.4620896577835083,
+      0.38284364342689514,
+      0.28207117319107056,
+      0.2028028815984726,
+      1.524376392364502,
+      0.7917011380195618
+    ],
+    "feature_std": [
+      0.6063536405563354,
+      0.18205823004245758,
+      0.11481809616088867,
+      0.11595578491687775,
+      0.2972799837589264,
+      0.24013756215572357,
+      0.2273719608783722,
+      0.14202940464019775,
+      0.44227465987205505,
+      0.20026598870754242
+    ],
+    "feature_order": [
+      "aspect_ratio",
+      "shoulder_hip_gap_norm",
+      "hip_knee_gap_norm",
+      "knee_ankle_gap_norm",
+      "shoulder_ankle_gap_norm",
+      "head_hip_gap_norm",
+      "shoulder_width_norm",
+      "hip_width_norm",
+      "mean_keypoint_conf",
+      "visible_keypoint_frac"
+    ]
+  },
+  "output": {
+    "name": "fall_probability",
+    "shape": [
+      "batch",
+      1
+    ],
+    "dtype": "float32",
+    "description": "P(fall) in [0, 1]. Already through sigmoid - no further transform needed."
+  },
+  "training": {
+    "epochs": 200,
+    "lr": 0.01,
+    "train_instances": 292,
+    "val_instances": 65,
+    "train_fall": 87,
+    "train_not_fall": 205,
+    "elapsed_seconds": 0.07,
+    "best_val_loss": 0.0746
+  },
+  "onnx_pytorch_equivalence_max_abs_diff": 5.960464477539063e-08
+}

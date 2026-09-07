@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, require_operator
 from app.database import get_db
 from app.models.recording import Recording
+from app.services.cascade_delete import stage_delete_recording
 from app.models.user import User
 from app.schemas.recording import RecordingOut
 
@@ -26,12 +27,15 @@ def _get_recording_or_404(recording_id: int, db: Session) -> Recording:
 @router.get("", response_model=List[RecordingOut])
 def list_recordings(
     camera_id: Optional[int] = None,
+    video_upload_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(Recording)
     if camera_id is not None:
         query = query.filter(Recording.camera_id == camera_id)
+    if video_upload_id is not None:
+        query = query.filter(Recording.video_upload_id == video_upload_id)
     return query.order_by(Recording.event_timestamp.desc()).all()
 
 
@@ -111,12 +115,12 @@ def download_recording(
 def delete_recording(
     recording_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    _operator: User = Depends(require_operator),
 ):
     recording = _get_recording_or_404(recording_id, db)
     file_path = recording.file_path
 
-    db.delete(recording)
+    stage_delete_recording(db, recording)
     db.commit()
 
     if os.path.exists(file_path):

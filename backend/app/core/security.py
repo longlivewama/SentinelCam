@@ -1,7 +1,9 @@
 """
-Password hashing (bcrypt via passlib) and JWT issuance/verification
-(python-jose, HS256).
+Password hashing (bcrypt via passlib), JWT issuance/verification
+(python-jose, HS256), and password-reset token generation.
 """
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -39,3 +41,17 @@ def decode_access_token(token: str) -> Optional[dict[str, Any]]:
         return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except JWTError:
         return None
+
+
+def generate_password_reset_token() -> tuple[str, str, datetime]:
+    """Returns (raw_token, token_hash, expires_at). The raw token is what
+    gets emailed to the user and is never persisted; only its SHA-256 hash
+    is stored, so a database leak alone can't be used to reset accounts."""
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hash_reset_token(raw_token)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    return raw_token, token_hash, expires_at
+
+
+def hash_reset_token(raw_token: str) -> str:
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()

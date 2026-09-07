@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.deps import get_current_user, require_admin
+from app.core.deps import get_current_user, require_operator
 from app.database import get_db
 from app.models.camera import Camera
 from app.models.user import User
@@ -35,7 +35,7 @@ def list_cameras(db: Session = Depends(get_db), current_user: User = Depends(get
 def create_camera(
     payload: CameraCreate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _operator: User = Depends(require_operator),
 ):
     camera = Camera(**payload.model_dump())
     db.add(camera)
@@ -58,7 +58,7 @@ def update_camera(
     camera_id: int,
     payload: CameraUpdate,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _operator: User = Depends(require_operator),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None:
@@ -77,7 +77,7 @@ def update_camera(
 def delete_camera(
     camera_id: int,
     db: Session = Depends(get_db),
-    _admin: User = Depends(require_admin),
+    _operator: User = Depends(require_operator),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None:

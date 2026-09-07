@@ -6,7 +6,7 @@ import CameraForm from '../components/CameraForm'
 import Modal from '../components/Modal'
 
 export default function Cameras() {
-  const isAdmin = useAuthStore((s) => s.isAdmin())
+  const isOperator = useAuthStore((s) => s.isOperator())
   const [cameras, setCameras] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -18,7 +18,7 @@ export default function Cameras() {
     try {
       const { data } = await apiClient.get('/api/cameras')
       setCameras(data)
-    } catch (err) {
+    } catch {
       setError('Failed to load cameras.')
     } finally {
       setLoading(false)
@@ -44,7 +44,7 @@ export default function Cameras() {
             {cameras.length} camera{cameras.length === 1 ? '' : 's'} configured
           </p>
         </div>
-        {isAdmin && (
+        {isOperator && (
           <button onClick={() => setShowAddModal(true)} className="sc-btn-primary">
             + Add Camera
           </button>

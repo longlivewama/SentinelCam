@@ -11,7 +11,11 @@ export const useAuthStore = create(
 
       logout: () => set({ token: null, user: null }),
 
-      isAdmin: () => Boolean(get().user?.is_admin),
+      isAdmin: () => get().user?.role === 'admin',
+
+      isOperator: () => ['admin', 'operator'].includes(get().user?.role),
+
+      hasRole: (...roles) => roles.includes(get().user?.role),
     }),
     {
       name: 'sentinelcam-auth',

@@ -5,7 +5,7 @@ export default function AdminRoute() {
   const isAdmin = useAuthStore((s) => s.isAdmin())
 
   if (!isAdmin) {
-    return <Navigate to="/cameras" replace />
+    return <Navigate to="/dashboard" replace />
   }
 
   return <Outlet />
