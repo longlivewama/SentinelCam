@@ -9,7 +9,7 @@ from app.core.security import hash_password
 from app.database import get_db
 from app.models.password_reset_token import PasswordResetToken
 from app.models.user import User
-from app.models.video_upload import VideoUpload
+from app.models.video_upload import STATUS_PENDING, STATUS_PROCESSING, VideoUpload
 from app.schemas.user import UserCreate, UserOut, UserUpdateRole
 from app.services.cascade_delete import stage_delete_video_upload, unlink_user_from_acknowledged_alerts
 
@@ -56,6 +56,31 @@ def delete_user(
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # An upload that is still pending/processing has an analysis worker
+    # thread holding its stored_path and writing to its row - deleting the
+    # user (and cascading into that upload) here would race it exactly
+    # like deleting the upload directly does (see video_uploads.py's
+    # DELETE endpoint). That endpoint defers to the worker by flipping
+    # deletion_requested, but video_uploads.user_id is NOT NULL, so a
+    # deferred-but-not-yet-deleted upload would still block deleting this
+    # user row on the same FK a moment later. Refuse instead: the admin
+    # can retry once analysis finishes, or delete those uploads
+    # individually first (which defers correctly and returns immediately).
+    active_uploads = (
+        db.query(VideoUpload)
+        .filter(VideoUpload.user_id == user_id, VideoUpload.status.in_((STATUS_PENDING, STATUS_PROCESSING)))
+        .count()
+    )
+    if active_uploads:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Cannot delete this user: {active_uploads} of their video upload(s) are still "
+                "being analyzed. Wait for analysis to finish (or fail), or delete those uploads "
+                "individually, then retry."
+            ),
+        )
 
     # Clear/cascade everything else that holds a foreign key to this user
     # before deleting it, so this doesn't hit any of those FK constraints:

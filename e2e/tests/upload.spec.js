@@ -65,6 +65,17 @@ test.describe('Video upload and analysis', () => {
 
     await expect(page.getByText('Video deleted.')).toBeVisible()
     await expect(matchingRows).toHaveCount(countBefore)
+
+    // The delete lands while the analysis worker is still running (this
+    // test deliberately does not wait for "completed" first), so this
+    // reload is the end-to-end check that the upload stays deleted:
+    // the worker must not resurrect the row by writing a result to it
+    // after the fact. Backend-side this is covered exhaustively in
+    // backend/tests/test_video_upload_deletion_race.py; here it is
+    // verified through the real UI against a real background thread.
+    await page.reload()
+    await expect(page.getByText('Loading uploads…')).toHaveCount(0)
+    await expect(matchingRows).toHaveCount(countBefore)
   })
 
   test('rejects an unsupported file without sending it to the server', async ({ page }) => {

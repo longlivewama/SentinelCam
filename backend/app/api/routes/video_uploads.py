@@ -22,7 +22,7 @@ from app.core.ranges import serve_file_range
 from app.core.video_signature import looks_like_supported_video
 from app.database import get_db
 from app.models.user import User
-from app.models.video_upload import VideoUpload
+from app.models.video_upload import STATUS_PENDING, STATUS_PROCESSING, VideoUpload
 from app.schemas.video_upload import VideoUploadOut
 from app.services.cascade_delete import stage_delete_video_upload
 from app.services.video_analysis import analyze_video_upload
@@ -44,7 +44,17 @@ MAX_LIST_LIMIT = 1000
 
 
 def _get_upload_or_404(upload_id: int, db: Session) -> VideoUpload:
-    upload = db.query(VideoUpload).filter(VideoUpload.id == upload_id).first()
+    # A row with deletion_requested set is mid-teardown: the analysis
+    # worker (if one is still running) owns finishing its removal, but
+    # from any API caller's point of view it must already read as gone -
+    # otherwise a GET immediately after a successful DELETE could still
+    # show it, and a second DELETE could look like a fresh, successful
+    # one instead of the idempotent no-op it should be.
+    upload = (
+        db.query(VideoUpload)
+        .filter(VideoUpload.id == upload_id, VideoUpload.deletion_requested.is_(False))
+        .first()
+    )
     if upload is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video upload not found")
     return upload
@@ -187,7 +197,7 @@ def list_video_uploads(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(VideoUpload)
+    query = db.query(VideoUpload).filter(VideoUpload.deletion_requested.is_(False))
     if not current_user.is_operator:
         query = query.filter(VideoUpload.user_id == current_user.id)
     return query.order_by(VideoUpload.created_at.desc()).limit(limit).all()
@@ -225,6 +235,21 @@ def delete_video_upload(
 ):
     upload = _get_upload_or_404(upload_id, db)
     _ensure_can_view(upload, current_user)
+
+    if upload.status in (STATUS_PENDING, STATUS_PROCESSING):
+        # Analysis is (or is about to be) actively reading this upload's
+        # file and writing to its row from a background thread. Deleting
+        # it here - out from under that thread - is exactly the race this
+        # defers: instead, flip a flag the worker already checks before
+        # every write that matters (see video_analysis.py's
+        # _finalize_if_deletion_requested) and let it perform the actual
+        # cascade-delete once it stops touching the row. The response is
+        # still immediate and deterministic - _get_upload_or_404 makes a
+        # deletion_requested row read as 404 everywhere from this point
+        # on, so the caller sees it as gone right away.
+        upload.deletion_requested = True
+        db.commit()
+        return None
 
     paths = stage_delete_video_upload(db, upload)
     db.commit()
