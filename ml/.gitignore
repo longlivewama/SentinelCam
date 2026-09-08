@@ -19,3 +19,8 @@ data/fall_detection_smoke/
 runs/
 # Local secrets (ROBOFLOW_API_KEY) - never commit.
 .env
+
+# Video-level validation corpus: real footage of real people falling. Never
+# committed - see ml/validation/README.md's privacy section. The annotation
+# format and the evaluation code ARE committed; the videos are not.
+data/validation/

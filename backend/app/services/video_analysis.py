@@ -40,13 +40,13 @@ from app.models.video_upload import (
 )
 from app.services.detection.engine import detection_engine
 from app.services.detection.fall_pipeline import FallPipeline
+from app.services.detection.video_scan import open_video, scan_video
 from app.services.notifications import notification_service
 from app.services.realtime import realtime_broadcaster
 from app.services import recording_engine as recording_engine_mod
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FPS = 25.0
 PRE_EVENT_SECONDS = 3
 POST_EVENT_SECONDS = 3
 
@@ -140,21 +140,20 @@ def _run_guarded(video_upload_id: int):
 def _process(video_upload_id: int, stored_path: str, original_filename: str):
     detection_engine.ensure_models()
 
-    cap = cv2.VideoCapture(stored_path)
-    if not cap.isOpened():
-        raise RuntimeError("Could not open uploaded video file - it may be corrupt or in an unsupported format")
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or DEFAULT_FPS
-    if fps <= 0:
-        fps = DEFAULT_FPS
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    duration_seconds = (frame_count / fps) if frame_count else None
+    # Frame iteration, stride and video-timeline arithmetic live in
+    # detection/video_scan.py so the offline validation runner
+    # (ml/validation/) drives the exact same loop - its measured recall and
+    # false-alert rate are then statements about this code path, not about
+    # a re-implementation of it.
+    cap, properties = open_video(stored_path)
+    fps = properties.fps
+    frame_count = properties.frame_count
 
     _set_status(
         video_upload_id,
         fps=fps,
         frame_count=frame_count or None,
-        duration_seconds=duration_seconds,
+        duration_seconds=properties.duration_seconds,
     )
 
     fall_pipeline = FallPipeline()
@@ -167,16 +166,10 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str):
 
     max_concurrent_persons = 0
     fall_events = []  # list of {"timestamp_seconds", "confidence"}
-    frame_index = 0
     last_reported_percent = -1
 
-    stride = max(settings.VIDEO_ANALYSIS_FRAME_STRIDE, 1)
-
-    while True:
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            break
-
+    for scanned in scan_video(cap, properties, fall_pipeline, detection_engine.extract_people):
+        frame = scanned.frame
         raw_buffer.append(frame)
 
         # Advance any clips currently collecting post-event frames.
@@ -190,26 +183,27 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str):
                 still_pending.append(clip)
         pending_clips = still_pending
 
-        if frame_index % stride == 0:
-            video_time_seconds = frame_index / fps
-            people = detection_engine.extract_people(frame)
-            max_concurrent_persons = max(max_concurrent_persons, len(people))
+        if scanned.processed:
+            max_concurrent_persons = max(max_concurrent_persons, len(scanned.people))
 
-            for fall_event in fall_pipeline.update(frame, people, now=video_time_seconds):
+            for fall_event in scanned.fall_events:
                 confidence = fall_event.get("confidence", 1.0)
                 detector = fall_event.get("detector")
-                fall_events.append({"timestamp_seconds": round(video_time_seconds, 2), "confidence": confidence})
+                fall_events.append({
+                    "timestamp_seconds": round(scanned.video_time_seconds, 2),
+                    "confidence": confidence,
+                })
                 pending_clips.append({
                     "remaining": int(POST_EVENT_SECONDS * fps) or 1,
                     "frames": list(raw_buffer),
                     "event": {
-                        "timestamp_seconds": video_time_seconds,
+                        "timestamp_seconds": scanned.video_time_seconds,
                         "confidence": confidence,
                         "detector": detector,
                     },
                 })
 
-        frame_index += 1
+        frame_index = scanned.index + 1
         if frame_count:
             percent = min(99, int((frame_index / frame_count) * 100))
             if percent != last_reported_percent:
