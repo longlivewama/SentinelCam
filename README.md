@@ -402,7 +402,7 @@ The full commented list lives in [`.env.example`](.env.example),
 
 ## Testing
 
-**261 automated tests across three suites**, all currently passing, plus a four-job CI pipeline.
+**261 automated tests across three suites**, all currently passing, plus a five-job CI pipeline.
 
 | Suite | Count | What it covers |
 |---|---:|---|
