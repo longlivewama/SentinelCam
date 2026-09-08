@@ -138,17 +138,32 @@ confidence floor):
 Stated plainly, because deploying this into a care setting without knowing them
 would be irresponsible.
 
-1. **No video-level evaluation.** Everything above is per-frame on stills. The
-   end-to-end quantity that matters — falls detected per fall that happened,
-   and false alerts per hour of ordinary footage — has not been measured,
-   because no labelled fall *video* corpus is wired into this pipeline. This is
-   the single largest gap and the top item in the roadmap.
+1. **No video-level *results* yet — the framework exists, the footage does
+   not.** Everything above is per-frame on stills. The end-to-end quantities
+   that matter — falls detected per fall that happened, and false alerts per
+   hour of ordinary footage — are **still unmeasured**.
+
+   What changed: `ml/validation/` now implements the evaluation end to end. It
+   drives the real production inference path over a labelled corpus of clips
+   and reports incident recall, incident precision, false alerts/hour and
+   detection latency, plus a sweep over `FALL_DETECTOR_MIN_CONFIDENCE` and
+   `FALL_DETECTOR_MIN_SUSTAINED_SECONDS`. It refuses to run against anything
+   but the trained checkpoint, and records that checkpoint's sha256 in every
+   report.
+
+   What has not changed: **no labelled video corpus exists yet**, so no
+   video-level number has been produced. Evaluation framework ready; real video
+   validation pending labelled footage. Nothing in this model card is
+   video-level evidence, and the thresholds below remain unvalidated defaults
+   chosen by reasoning, not by measurement. See `ml/validation/README.md`.
 2. **No hard-negative validation for floor-level activity.** The background
    images are PASCAL VOC — ordinary photographs of upright people. They do not
    contain someone doing sit-ups, a child playing on the floor, a person
    crouching to reach a low shelf, or someone lying on a sofa. Those are the
    realistic false-positive sources in a real deployment and the test set says
-   nothing about them.
+   nothing about them. `ml/validation/` can now *measure* this — it groups
+   every false alert by the activity that produced it — but only once
+   hard-negative clips are collected. Still unmeasured.
 3. **The source data is not care-home footage.** It mixes web-sourced fall
    images with some CCTV frames. Camera height, lens, lighting, and occlusion in
    an actual installation will differ, and detection quality will differ with it.

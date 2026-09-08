@@ -78,8 +78,10 @@ production detector running, not a separate demo path.
 
 > **Scope note.** This is an engineering project, **not a certified medical or safety device**.
 > The trained detector scores mAP@50 0.877 on a held-out test split of stills; it has **not** been
-> evaluated on video, and not against realistic floor-level hard negatives. Those limits are
-> spelled out in [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) and must be read before any operational use.
+> evaluated on video, and not against realistic floor-level hard negatives. A framework to do both
+> exists at [`ml/validation/`](ml/validation/README.md) but has no labelled corpus to run on yet.
+> Those limits are spelled out in [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) and must be read before
+> any operational use.
 
 ---
 
@@ -473,10 +475,18 @@ Two preparation decisions shape what this model is, and both came out of a datas
   Mosaic is kept at 1.0 precisely *because* no source image contains both a fall and an upright
   person — compositing four images synthesises the co-occurrence the dataset structurally lacks.
 
-**Known limitations, stated plainly:** no video-level evaluation (all metrics are per-frame on
-stills), no hard-negative validation against floor-level activity like sit-ups or crouching, and
-source data that is not care-home footage. See the model card's Limitations section in full before
-deploying it anywhere real.
+**Known limitations, stated plainly:** every metric above is **per-frame on stills**. The
+operational quantities — falls detected per fall that happened, false alerts per hour of ordinary
+footage, detection latency — are **not measured**, and the source data is not care-home footage.
+See the model card's Limitations section in full before deploying it anywhere real.
+
+**Frame-level metrics are not operational evidence.** `ml/validation/` implements the video-level
+evaluation that would produce it: it drives the real production inference path over labelled clips
+and reports incident recall, incident precision, false alerts/hour, latency and a sweep over the
+two thresholds that govern the trade-off. **Evaluation framework ready; real video validation
+pending labelled footage** — no labelled corpus exists yet, so no video-level number has been
+produced, and `FALL_DETECTOR_MIN_CONFIDENCE` / `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` remain
+reasoned defaults rather than measured ones. See [`ml/validation/README.md`](ml/validation/README.md).
 
 ### Integration
 
@@ -594,16 +604,25 @@ Recently completed:
 - [x] **In-video fall timestamps persisted**, so uploaded-video results seek to the exact moment
       of each detection rather than showing a wall-clock time.
 - [x] **Row-level authorization** on alerts, recordings, analytics and the realtime channel.
+- [x] **Video-level validation framework** — [`ml/validation/`](ml/validation/README.md) evaluates
+      the real production pipeline per *incident* rather than per frame, with a documented
+      matching rule, a threshold sweep and hard-negative attribution. It produces no numbers yet:
+      it is waiting on labelled footage, not on code.
 
 Planned:
 
-- [ ] **Video-level model evaluation** — the largest remaining gap. Every published metric is
-      per-frame on stills; the numbers that matter operationally (falls detected per fall that
-      occurred, false alerts per hour of ordinary footage) require a labelled fall *video* corpus
-      and are currently unmeasured.
+- [ ] **Video-level model evaluation** — the largest remaining gap. The *framework* is now
+      built and tested ([`ml/validation/`](ml/validation/README.md)): it drives the real
+      production inference path over labelled clips and reports incident recall, incident
+      precision, false alerts/hour, latency and a threshold sweep. What is missing is the
+      **labelled fall video corpus** — 20–50 clips, roughly half falls and half hard negatives.
+      Until those exist, every published metric remains per-frame on stills and the operational
+      numbers are unmeasured. *Evaluation framework ready; real video validation pending
+      labelled footage.*
 - [ ] **Hard-negative validation** — evaluate against realistic floor-level activity (sit-ups,
       crouching, a child playing, someone lying on a sofa), none of which the current test split
-      contains.
+      contains. The evaluator groups every false alert by the activity that produced it, so this
+      lands with the corpus above rather than needing separate tooling.
 - [ ] **Inference performance** — batched/strided frame processing and optional GPU acceleration
       for faster analysis of long recordings.
 - [ ] **Horizontally scalable realtime** — move the rate limiter and event broadcaster to Redis so
@@ -630,7 +649,11 @@ Stated plainly, because they matter when reading the rest of this document:
    0.846 / recall 0.800 / mAP@50 0.877 on a held-out test split) are **per frame, on still
    images**. Per-*incident* recall is certainly higher — a real fall is sampled dozens of times —
    but it is not measured, and neither is the false-alert rate over ordinary footage. It also has
-   no validation against floor-level hard negatives (sit-ups, crouching, lying on a sofa). See
+   no validation against floor-level hard negatives (sit-ups, crouching, lying on a sofa). The
+   evaluation framework that would measure all of this now exists and is tested
+   ([`ml/validation/`](ml/validation/README.md)), but **it has never been run on real footage,
+   because no labelled corpus exists** — building the framework did not close this gap, it only
+   made the gap closable. Treat every operational figure as unknown. See
    [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) for the full list.
 2. **Deleting a video while it is being analysed is an unresolved backend race.** The analysis
    worker and the delete endpoint can interleave; the failure is contained (the worker records a

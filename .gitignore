@@ -63,6 +63,12 @@ htmlcov/
 /ml/runs/
 /ml/logs/
 /ml/reports/dataset_samples/
+# Video-level validation corpus (footage of real people) and its detection
+# cache - see ml/validation/README.md. The framework is committed; the
+# videos and the generated report are not.
+/ml/data/validation/
+/ml/reports/fall_detector_video_validation.md
+/ml/reports/fall_detector_video_validation.json
 
 # --- Misc ---
 *.log
