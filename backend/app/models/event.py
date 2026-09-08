@@ -24,8 +24,9 @@ class Event(Base):
     # also when it happened; for an uploaded video it is when the analysis
     # reached that moment, which says nothing about where in the footage
     # the fall occurred - that is video_timestamp_seconds below. The UI
-    # must not present this as a position within the video.
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    # must not present this as a position within the video. Indexed: the
+    # alert listing and the analytics window both order/filter on it.
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     # Offset, in seconds from the start of the source file, at which the
     # event was detected. Only meaningful for events from an uploaded

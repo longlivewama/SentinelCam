@@ -85,6 +85,7 @@ def test_migrated_schema_matches_the_models(fresh_empty_database):
 
     conn = psycopg2.connect(fresh_empty_database)
     migrated = {}
+    migrated_indexes = set()
     with conn.cursor() as cur:
         cur.execute(
             "SELECT table_name, column_name FROM information_schema.columns "
@@ -92,6 +93,9 @@ def test_migrated_schema_matches_the_models(fresh_empty_database):
         )
         for table_name, column_name in cur.fetchall():
             migrated.setdefault(table_name, set()).add(column_name)
+
+        cur.execute("SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
+        migrated_indexes = {row[0] for row in cur.fetchall()}
     conn.close()
 
     missing = []
@@ -104,4 +108,19 @@ def test_migrated_schema_matches_the_models(fresh_empty_database):
     assert not missing, (
         "these columns exist on the SQLAlchemy models but not after "
         f"`alembic upgrade head` - a migration is missing: {missing}"
+    )
+
+    # Indexes too: an index declared on a model but never migrated is a
+    # silent performance cliff in production rather than a loud failure,
+    # and a migration that names one differently from SQLAlchemy's
+    # convention leaves the two permanently out of step.
+    missing_indexes = sorted(
+        index.name
+        for table in Base.metadata.sorted_tables
+        for index in table.indexes
+        if index.name not in migrated_indexes
+    )
+    assert not missing_indexes, (
+        "these indexes exist on the SQLAlchemy models but not after "
+        f"`alembic upgrade head`: {missing_indexes}"
     )

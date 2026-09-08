@@ -11,7 +11,7 @@ import logging
 import os
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,14 @@ from app.schemas.recording import RecordingOut
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
+
+# Newest-first with a bound rather than an unbounded fetch: a camera left
+# running produces clips indefinitely, and "return every row" turns into a
+# multi-megabyte response and a browser rendering thousands of rows. The
+# cap is generous enough that no realistic UI hits it; real pagination is
+# on the roadmap.
+DEFAULT_LIMIT = 500
+MAX_LIMIT = 1000
 
 
 
@@ -56,6 +64,7 @@ def _existing_file_or_404(recording: Recording) -> str:
 def list_recordings(
     camera_id: Optional[int] = None,
     video_upload_id: Optional[int] = None,
+    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -64,7 +73,7 @@ def list_recordings(
         query = query.filter(Recording.camera_id == camera_id)
     if video_upload_id is not None:
         query = query.filter(Recording.video_upload_id == video_upload_id)
-    return query.order_by(Recording.event_timestamp.desc()).all()
+    return query.order_by(Recording.event_timestamp.desc()).limit(limit).all()
 
 
 @router.get("/{recording_id}", response_model=RecordingOut)

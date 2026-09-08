@@ -402,11 +402,11 @@ The full commented list lives in [`.env.example`](.env.example),
 
 ## Testing
 
-**251 automated tests across three suites**, all currently passing, plus a four-job CI pipeline.
+**261 automated tests across three suites**, all currently passing, plus a four-job CI pipeline.
 
 | Suite | Count | What it covers |
 |---|---:|---|
-| **Backend** (pytest) | **159** | Security primitives, fall-detection logic (both the trained-model gate and the pose heuristic), the committed model artifact's contract, cross-user isolation, auth & RBAC, cameras, alerts, recordings, upload validation, HTTP Range handling, realtime delivery scoping, analytics, rate limiting, Alembic migrations + schema-drift detection, email notifier, and an end-to-end video analysis over a real decoded video |
+| **Backend** (pytest) | **169** | Security primitives, fall-detection logic (both the trained-model gate and the pose heuristic), the committed model artifact's contract, cross-user isolation, auth & RBAC, cameras, alerts, recordings, upload validation, HTTP Range handling, realtime delivery scoping, analytics, rate limiting, Alembic migrations + schema-drift detection, email notifier, and an end-to-end video analysis over a real decoded video |
 | **Frontend** (Vitest + Testing Library) | **76** | Auth pages, route guards, upload workflow (drag-drop, validation, progress, delete), the results screen's in-video timestamps and detector labelling, system status including the model-fallback warning, dashboard, formatting helpers, Zustand stores |
 | **End-to-end** (Playwright) | **16** | Real Chromium against the real Docker Compose stack — signup, login, logout, forgot/reset password (reading the actual email out of Mailpit's API), camera CRUD + RBAC, alert acknowledgement, recording playback, and the full upload → process → view-results workflow |
 | **Docker** | 4 services | `postgres`, `backend`, `frontend`, `mailpit` — all healthy under `docker compose up` |
@@ -608,6 +608,9 @@ Planned:
       for faster analysis of long recordings.
 - [ ] **Horizontally scalable realtime** — move the rate limiter and event broadcaster to Redis so
       the backend can run multiple workers or instances.
+- [ ] **Pagination** on the alert, recording and upload listings. They are now bounded (500
+      newest by default, 1000 max) rather than unbounded, but a deployment past that cap needs
+      real paging rather than a larger ceiling.
 - [ ] **Richer analytics** — per-camera heatmaps, time-of-day distributions, exportable reports.
 - [ ] **More notification channels** — SMS and WhatsApp providers behind the existing interfaces.
 - [ ] **Observability** — structured logging, metrics and health dashboards.

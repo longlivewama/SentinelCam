@@ -117,3 +117,32 @@ def test_unsatisfiable_range_returns_416(client, viewer_headers, recording):
     )
     assert response.status_code == 416
     assert response.headers["content-range"] == f"bytes */{len(CONTENT)}"
+
+
+# --- list endpoints are bounded -------------------------------------------
+
+def test_recordings_listing_is_bounded(client, viewer_headers, recording):
+    """An unbounded list grows with every clip a running camera produces,
+    until the response is megabytes and the browser renders thousands of
+    rows. The cap is generous; what matters is that one exists."""
+    from app.api.routes.recordings import DEFAULT_LIMIT, MAX_LIMIT
+
+    assert DEFAULT_LIMIT <= MAX_LIMIT
+
+    ok = client.get("/api/recordings", params={"limit": 1}, headers=viewer_headers)
+    assert ok.status_code == 200
+    assert len(ok.json()) <= 1
+
+    over = client.get("/api/recordings", params={"limit": MAX_LIMIT + 1}, headers=viewer_headers)
+    assert over.status_code == 422
+
+    under = client.get("/api/recordings", params={"limit": 0}, headers=viewer_headers)
+    assert under.status_code == 422
+
+
+def test_alerts_listing_rejects_an_out_of_range_limit(client, viewer_headers):
+    from app.api.routes.alerts import MAX_LIMIT
+
+    assert client.get("/api/alerts", params={"limit": MAX_LIMIT + 1}, headers=viewer_headers).status_code == 422
+    assert client.get("/api/alerts", params={"limit": 0}, headers=viewer_headers).status_code == 422
+    assert client.get("/api/alerts", params={"limit": 5}, headers=viewer_headers).status_code == 200
