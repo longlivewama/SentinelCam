@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -37,6 +37,10 @@ MAX_UPLOAD_SIZE_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 # (the longest, Matroska/WebM's EBML DocType, sits within the first 64
 # bytes in practice; 256 leaves generous headroom).
 HEADER_SNIFF_BYTES = 256
+
+# See recordings.py for why the list endpoints are bounded.
+DEFAULT_LIST_LIMIT = 500
+MAX_LIST_LIMIT = 1000
 
 
 def _get_upload_or_404(upload_id: int, db: Session) -> VideoUpload:
@@ -179,13 +183,14 @@ async def create_video_upload(
 
 @router.get("", response_model=List[VideoUploadOut])
 def list_video_uploads(
+    limit: int = Query(default=DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(VideoUpload)
     if not current_user.is_operator:
         query = query.filter(VideoUpload.user_id == current_user.id)
-    return query.order_by(VideoUpload.created_at.desc()).all()
+    return query.order_by(VideoUpload.created_at.desc()).limit(limit).all()
 
 
 @router.get("/{upload_id}", response_model=VideoUploadOut)
