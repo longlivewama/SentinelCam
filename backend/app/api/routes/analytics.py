@@ -30,6 +30,37 @@ from app.models.video_upload import VideoUpload
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
+def _utc_day(ts: datetime) -> str:
+    """The UTC calendar day `ts` falls on, as `YYYY-MM-DD`.
+
+    Necessary because `Event.timestamp` is `DateTime(timezone=True)` -
+    `timestamptz` - and psycopg2 renders a timestamptz in the database
+    SESSION's timezone, not in UTC. The same stored instant therefore
+    comes back as a different wall clock depending only on how a
+    deployment's Postgres is configured:
+
+        2026-09-08 23:30+00 read under session TZ=UTC   -> 23:30 on the 8th
+        ...the very same row under session TZ=+03       -> 02:30 on the 9th
+
+    Taking `.strftime()` off that value directly (as this did) bucketed
+    events by the session's local day while the bucket keys below are
+    built from UTC, so under any non-UTC session every event in the
+    offset window landed in a key that did not exist and vanished from
+    the series. Converting first makes the answer depend only on the
+    instant, which is the whole point of storing timestamptz.
+
+    UTC is the convention the rest of the application already uses (every
+    `datetime.now(timezone.utc)` call site, every timestamp column); there
+    is no configured application timezone to defer to instead.
+    """
+    if ts.tzinfo is None:
+        # No session rendering happened (a naive column, or SQLite).
+        # These are written as UTC everywhere, so say so explicitly
+        # rather than letting astimezone() assume the host's local zone.
+        return ts.strftime("%Y-%m-%d")
+    return ts.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
 @router.get("/summary")
 def get_summary(
     days: int = 14,
@@ -73,14 +104,18 @@ def get_summary(
         event_type_counts[event_type] += 1
         confidence_by_type[event_type].append(confidence_score)
         if event_type == "fall":
-            day_key = ts.strftime("%Y-%m-%d") if ts else "unknown"
+            day_key = _utc_day(ts) if ts else "unknown"
             falls_by_day[day_key] += 1
             if camera_id is not None:
                 falls_by_camera_count[camera_id] += 1
 
+    # Keys are UTC days, and so are falls_by_day's - see _utc_day. Both
+    # sides must use the same convention or every lookup below silently
+    # misses, which is exactly how this broke.
+    now_utc = datetime.now(timezone.utc)
     falls_over_time = []
     for i in range(days - 1, -1, -1):
-        day = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
+        day = _utc_day(now_utc - timedelta(days=i))
         falls_over_time.append({"date": day, "count": falls_by_day.get(day, 0)})
 
     falls_by_camera = [
