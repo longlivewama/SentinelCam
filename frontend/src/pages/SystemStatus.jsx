@@ -53,6 +53,14 @@ export default function SystemStatus() {
     )
   }
 
+  const fallDetector = status.models.fall_detector || {}
+  const activeMode = status.detection.fall_detection_mode_active
+  const configuredMode = status.detection.fall_detection_mode_configured
+  // Configured to prefer the model but running without it: the deployment
+  // is quietly degraded, which is worth calling out rather than showing a
+  // uniformly green page.
+  const usingHeuristicFallback = activeMode === 'heuristic' && configuredMode !== 'heuristic'
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
       <div className="mb-6">
@@ -65,8 +73,49 @@ export default function SystemStatus() {
 
       <div className="sc-card mb-6 p-6">
         <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Models</h2>
+        <StatusRow
+          label="Trained fall detector"
+          ok={fallDetector.loaded}
+          okLabel="Loaded"
+          badLabel="Not loaded"
+        />
+        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+          <span className="text-sm text-slate-300">Fall detection running as</span>
+          <span className={`text-sm ${usingHeuristicFallback ? 'text-status-warn' : 'text-slate-400'}`}>
+            {activeMode === 'model'
+              ? 'Trained model'
+              : activeMode === 'hybrid'
+                ? 'Model + pose heuristic'
+                : 'Pose heuristic'}
+            {configuredMode === 'auto' && <span className="text-slate-500"> (auto)</span>}
+          </span>
+        </div>
+        {/* An "auto" deployment that silently fell back to the weaker
+            heuristic looks identical to a healthy one from the outside.
+            This is where an operator finds out - and why. */}
+        {usingHeuristicFallback && (
+          <div className="my-2 rounded-lg border border-status-warn/30 bg-status-warn/10 px-3 py-2 text-xs text-amber-300">
+            <p className="font-medium">Running on the pose heuristic, not the trained model.</p>
+            <p className="mt-1 text-amber-300/80">
+              {fallDetector.error || 'The trained detector is not configured.'} Fall detection still
+              works, but accuracy is lower than the documented model performance.
+            </p>
+          </div>
+        )}
+        {fallDetector.class_names && (
+          <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+            <span className="text-sm text-slate-300">Detector classes</span>
+            <span className="font-mono text-sm text-slate-400">
+              {Object.values(fallDetector.class_names).join(', ')}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+          <span className="text-sm text-slate-300">Detection confidence floor</span>
+          <span className="text-sm text-slate-400">{Math.round((fallDetector.min_confidence ?? 0) * 100)}%</span>
+        </div>
         <StatusRow label="Pose + object models loaded" ok={status.models.pose_object_models_loaded} badLabel="Not loaded yet" />
-        <StatusRow label={`Fall classifier (corroborating signal)`} ok={status.models.fall_classifier_loaded} />
+        <StatusRow label="Fall classifier (corroborating signal)" ok={status.models.fall_classifier_loaded} />
         <StatusRow label="Violence detection model" ok={status.models.violence_model_configured} okLabel="Trained model" badLabel="Heuristic only" />
       </div>
 
@@ -82,9 +131,13 @@ export default function SystemStatus() {
           <span className="text-sm text-slate-300">Live detection frame stride</span>
           <span className="text-sm text-slate-400">every {status.detection.detection_frame_stride} frames</span>
         </div>
-        <div className="flex items-center justify-between py-2.5">
+        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
           <span className="text-sm text-slate-300">Video analysis frame stride</span>
           <span className="text-sm text-slate-400">every {status.detection.video_analysis_frame_stride} frames</span>
+        </div>
+        <div className="flex items-center justify-between py-2.5">
+          <span className="text-sm text-slate-300">Concurrent video analyses</span>
+          <span className="text-sm text-slate-400">up to {status.detection.max_concurrent_video_analyses}</span>
         </div>
       </div>
 

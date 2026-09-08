@@ -43,8 +43,13 @@ export default async function globalSetup() {
   // ready, not just "containers started".
   run('docker compose up -d --build --wait', { env })
 
+  // --user: `docker compose exec` bypasses the image entrypoint, so it
+  // would otherwise run as root and leave root-owned directories inside
+  // the storage volume that the (unprivileged) server process then cannot
+  // write into. Seed as the same uid the app runs as.
   run(
-    `docker compose exec -T -e E2E_ADMIN_EMAIL=${ADMIN_EMAIL} -e E2E_ADMIN_PASSWORD=${ADMIN_PASSWORD} ` +
+    `docker compose exec -T --user 10001:10001 ` +
+      `-e E2E_ADMIN_EMAIL=${ADMIN_EMAIL} -e E2E_ADMIN_PASSWORD=${ADMIN_PASSWORD} ` +
       'backend python scripts/seed_e2e_fixtures.py',
   )
 }

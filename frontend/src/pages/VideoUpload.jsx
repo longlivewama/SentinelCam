@@ -4,7 +4,7 @@ import Modal from '../components/Modal'
 import { useAuthStore } from '../store/authStore'
 import { toast } from '../store/toastStore'
 import { onRealtimeEvent } from '../lib/realtime'
-import { formatBytes, formatDateTime } from '../lib/format'
+import { detectorMeta, formatBytes, formatDateTime, formatVideoTimestamp } from '../lib/format'
 import { ALLOWED_VIDEO_EXTENSIONS, MAX_UPLOAD_SIZE_MB, validateVideoFile } from '../lib/videoValidation'
 
 const STATUS_STYLES = {
@@ -36,6 +36,7 @@ function isActive(upload) {
 
 function UploadDetailModal({ upload, onClose }) {
   const token = useAuthStore((s) => s.token)
+  const sourceVideoRef = useRef(null)
   const [recordings, setRecordings] = useState([])
   const [fallEvents, setFallEvents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -75,10 +76,33 @@ function UploadDetailModal({ upload, onClose }) {
 
   const sourceVideoUrl = `${API_URL}/api/video-uploads/${upload.id}/video?token=${token}`
 
+  // Jump the source player to where in the footage a fall was detected.
+  // This is the whole point of persisting an in-video offset: an operator
+  // wants to see the moment itself, not just a clip of it.
+  const seekTo = (seconds) => {
+    const video = sourceVideoRef.current
+    if (!video || seconds === null || seconds === undefined) return
+    video.currentTime = seconds
+    video.play().catch(() => {
+      // Autoplay can be blocked; the seek still happened, which is the
+      // part that matters.
+    })
+    video.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
+
   const recordingsById = new Map(recordings.map((rec) => [rec.id, rec]))
   // Oldest-first so the numbering below reads in the order the falls
-  // were detected; the API returns newest-first.
-  const orderedEvents = [...fallEvents].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  // occurred. Sort by position in the FOOTAGE where we have it, falling
+  // back to detection order for older rows recorded before that column
+  // existed.
+  const orderedEvents = [...fallEvents].sort((a, b) => {
+    const aTime = a.video_timestamp_seconds
+    const bTime = b.video_timestamp_seconds
+    if (aTime !== null && aTime !== undefined && bTime !== null && bTime !== undefined) {
+      return aTime - bTime
+    }
+    return new Date(a.timestamp) - new Date(b.timestamp)
+  })
   const unpairedRecordings = recordings.filter(
     (rec) => !orderedEvents.some((evt) => evt.recording_id === rec.id),
   )
@@ -117,7 +141,7 @@ function UploadDetailModal({ upload, onClose }) {
 
       <div className="mb-4">
         <p className="sc-label mb-2">Source video</p>
-        <video controls className="w-full rounded-lg bg-black" src={sourceVideoUrl}>
+        <video ref={sourceVideoRef} controls className="w-full rounded-lg bg-black" src={sourceVideoUrl}>
           Your browser does not support the video tag.
         </video>
       </div>
@@ -139,17 +163,52 @@ function UploadDetailModal({ upload, onClose }) {
         <div className="flex flex-col gap-4">
           {orderedEvents.map((event, index) => {
             const recording = recordingsById.get(event.recording_id)
+            const videoTime = formatVideoTimestamp(event.video_timestamp_seconds)
+            const detector = detectorMeta(event.detector)
+            const confidencePercent = Math.round((event.confidence_score ?? 0) * 100)
             return (
               <div key={event.id} className="rounded-lg border border-surface-800 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-slate-200">Fall {index + 1}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium text-slate-200">Fall {index + 1}</p>
+                    {videoTime ? (
+                      <button
+                        type="button"
+                        onClick={() => seekTo(event.video_timestamp_seconds)}
+                        title="Jump the source video to this moment"
+                        className="sc-badge border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20"
+                      >
+                        at {videoTime} in video
+                      </button>
+                    ) : (
+                      <span
+                        className="sc-badge border border-surface-600 bg-surface-800 text-slate-500"
+                        title="This analysis predates in-video timestamps"
+                      >
+                        position not recorded
+                      </span>
+                    )}
+                  </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
-                    <span>Detected {formatDateTime(event.timestamp)}</span>
-                    <span className="sc-badge border border-status-error/30 bg-status-error/10 text-status-error">
-                      {Math.round((event.confidence_score ?? 0) * 100)}% confidence
+                    {detector && (
+                      <span
+                        title={detector.title}
+                        className="sc-badge border border-surface-600 bg-surface-800 text-slate-400"
+                      >
+                        {detector.label}
+                      </span>
+                    )}
+                    <span
+                      className="sc-badge border border-status-error/30 bg-status-error/10 text-status-error"
+                      title="How confident the detector was, not how severe the fall was"
+                    >
+                      {confidencePercent}% confidence
                     </span>
                   </div>
                 </div>
+                <p className="mb-2 text-xs text-slate-500">
+                  Analysed {formatDateTime(event.timestamp)}
+                </p>
                 {recording ? (
                   <video
                     controls

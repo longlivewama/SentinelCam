@@ -3,7 +3,7 @@
 export const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL || 'e2e-admin@example.com'
 export const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'e2e-admin-password123'
 
-export const MAILPIT_URL = process.env.E2E_MAILPIT_URL || 'http://localhost:8025'
+export { MAILPIT_URL } from './env.js'
 
 /** A unique-per-run email so signup/login tests never collide with each
  * other or with a previous run's leftover data. */
