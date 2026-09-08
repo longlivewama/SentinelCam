@@ -26,8 +26,12 @@ jobs:
           # The trained detector (~5.4MB) is the largest thing we intend to
           # ship. Anything past 10MB is almost certainly a checkpoint or a
           # dataset that belongs behind .gitignore.
+          # `if` rather than a `&&` chain: under `bash -e` a trailing
+          # false test makes the loop (and so the command substitution)
+          # exit non-zero, which aborts the step even when nothing is
+          # oversized.
           oversized=$(git ls-files | while read -r f; do
-            [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 10485760 ] && echo "$f"
+            if [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 10485760 ]; then echo "$f"; fi
           done)
           if [ -n "$oversized" ]; then
             echo "::error::file(s) over 10MB committed: $oversized"
