@@ -6,6 +6,51 @@ on:
   pull_request:
 
 jobs:
+  # Cheap guards that fail a PR before anything expensive runs.
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No real .env files committed
+        run: |
+          # .env.example templates are fine; an actual .env is not.
+          found=$(git ls-files | grep -E '(^|/)\.env$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::committed environment file(s): $found"
+            exit 1
+          fi
+
+      - name: No unexpectedly large files
+        run: |
+          # The trained detector (~5.4MB) is the largest thing we intend to
+          # ship. Anything past 10MB is almost certainly a checkpoint or a
+          # dataset that belongs behind .gitignore.
+          oversized=$(git ls-files | while read -r f; do
+            [ -f "$f" ] && [ "$(wc -c < "$f")" -gt 10485760 ] && echo "$f"
+          done)
+          if [ -n "$oversized" ]; then
+            echo "::error::file(s) over 10MB committed: $oversized"
+            exit 1
+          fi
+
+      - name: Trained model artifact is present and intact
+        # A truncated checkout or an LFS pointer would leave the app
+        # silently falling back to the weaker pose heuristic.
+        run: |
+          python3 - <<'CHECK'
+          import hashlib, json, sys
+          from pathlib import Path
+          meta = json.loads(Path("ml/exported/fall_detector_v1.metadata.json").read_text())
+          artifact = Path(meta["file"]["path"])
+          if not artifact.exists():
+              sys.exit(f"::error::missing model artifact {artifact}")
+          digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+          if digest != meta["file"]["sha256"]:
+              sys.exit(f"::error::{artifact} sha256 {digest} != metadata {meta['file']['sha256']}")
+          print(f"{artifact}: {artifact.stat().st_size} bytes, sha256 OK")
+          CHECK
+
   backend:
     runs-on: ubuntu-latest
     services:
@@ -88,7 +133,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Matches the frontend job. Keeping one Node version across jobs
+          # removes a class of "passes in one job, fails in the other".
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: e2e/package-lock.json
 
@@ -150,3 +197,19 @@ jobs:
         working-directory: frontend
         run: npm audit --audit-level=critical
         continue-on-error: true
+
+      # Blocking, unlike the two informational audits above: a credential
+      # in the diff is never an accepted risk.
+      - name: Scan the diff for credential-shaped strings
+        run: |
+          git fetch --no-tags --depth=100 origin "${{ github.base_ref || github.ref_name }}" || true
+          base=$(git merge-base HEAD FETCH_HEAD 2>/dev/null || git rev-parse HEAD~1)
+          # Deliberately narrow - real provider key formats and private
+          # keys. Placeholders like "change-me-in-production" and the empty
+          # values in .env.example templates do not match.
+          added=$(git diff "$base"..HEAD -U0 -- . ':(exclude)*.lock' ':(exclude)**/package-lock.json' | grep -E '^\+' || true)
+          if printf '%s' "$added" | grep -E 'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32}|BEGIN [A-Z ]*PRIVATE KEY'; then
+            echo "::error::the diff contains something that looks like a credential"
+            exit 1
+          fi
+          echo "no credential-shaped strings in the diff"
