@@ -51,6 +51,13 @@ _TABLES_IN_DELETE_ORDER = [
 
 @pytest.fixture(scope="session", autouse=True)
 def _schema():
+    """Rebuilds the test schema from the models at the start of every
+    session. `create_all` alone only ever ADDS missing tables - it never
+    alters an existing one - so a test database left over from an older
+    revision of the models would silently keep the old columns and fail
+    every test that touches a newly added one. Dropping first makes the
+    schema unconditionally match app/models/*.py."""
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
 
@@ -105,6 +112,24 @@ def _make_user(db, email: str, role: str, password: str = "password123") -> User
 def _auth_headers(user: User) -> dict:
     token = create_access_token(user.id, user.email)
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def make_user_factory(db):
+    """Creates additional users beyond the three role fixtures below -
+    e.g. a second viewer, to test that one account cannot reach another's
+    data. Exposed as a fixture rather than importing _make_user directly,
+    because `tests` is not an importable package here."""
+    def _factory(email: str, role: str = ROLE_VIEWER, password: str = "password123") -> User:
+        return _make_user(db, email, role, password)
+
+    return _factory
+
+
+@pytest.fixture()
+def auth_headers_for():
+    """Bearer headers for an arbitrary User object."""
+    return _auth_headers
 
 
 @pytest.fixture()

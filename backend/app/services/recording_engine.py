@@ -42,20 +42,30 @@ from app.services.stream_manager import stream_manager
 logger = logging.getLogger(__name__)
 
 
-def trigger_event(camera_id: int, trigger_action: str, confidence_score: float = 1.0):
+def trigger_event(
+    camera_id: int,
+    trigger_action: str,
+    confidence_score: float = 1.0,
+    detector: str = "heuristic",
+):
     """Fire-and-forget entry point called by detection/engine.py. Spawns a
     worker thread so the detection loop isn't blocked collecting
-    post-event frames."""
+    post-event frames.
+
+    `detector` records which strategy made the call ("model" for the
+    trained YOLO fall detector, "heuristic" for the pose/geometry
+    detectors) and is stored on the Event row - the two compute
+    confidence differently, so a score is not interpretable without it."""
     thread = threading.Thread(
         target=_handle_event,
-        args=(camera_id, trigger_action, confidence_score),
+        args=(camera_id, trigger_action, confidence_score, detector),
         daemon=True,
         name=f"recording-{camera_id}-{trigger_action}",
     )
     thread.start()
 
 
-def _handle_event(camera_id: int, trigger_action: str, confidence_score: float):
+def _handle_event(camera_id: int, trigger_action: str, confidence_score: float, detector: str = "heuristic"):
     event_timestamp = datetime.now(timezone.utc)
     stream = stream_manager.get(camera_id)
     if stream is None:
@@ -82,7 +92,7 @@ def _handle_event(camera_id: int, trigger_action: str, confidence_score: float):
         return
 
     try:
-        _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames)
+        _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector)
     except Exception:
         logger.exception("Failed to persist recording for camera %s event %s", camera_id, trigger_action)
 
@@ -104,7 +114,7 @@ def open_writer(path: str, width: int, height: int, fps: int):
     return None, None
 
 
-def _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames):
+def _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector="heuristic"):
     height, width = all_frames[0].shape[:2]
     fps = max(settings.STREAM_FPS, 1)
 
@@ -161,6 +171,7 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
             event_type=trigger_action,
             confidence_score=confidence_score,
             timestamp=event_timestamp,
+            detector=detector,
             triggered_recording=True,
         )
         db.add(event)
@@ -181,6 +192,7 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
                 "event_type": trigger_action,
                 "confidence_score": confidence_score,
                 "timestamp": event_timestamp,
+                "detector": detector,
             },
         )
 

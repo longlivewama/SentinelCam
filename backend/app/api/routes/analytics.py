@@ -4,6 +4,12 @@ bucketing is done in Python rather than via SQL date-trunc functions so the
 same code works against both PostgreSQL (production) and SQLite (tests) -
 these aggregates are computed over a bounded, recent window (default 14
 days) so this is cheap even done in Python rather than in the database.
+
+Every figure here is scoped to what the caller may actually see (see
+core/scoping.py): a non-operator's counts cover shared-camera events plus
+their own uploads, not other users' analyses. Aggregates are still data -
+an unscoped "total alerts" tells a viewer how much other people uploaded
+and how many falls were found in it.
 """
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -13,6 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user
+from app.core.scoping import scope_events, scope_recordings
 from app.database import get_db
 from app.models.camera import Camera
 from app.models.event import Event
@@ -40,12 +47,18 @@ def get_summary(
         or 0
     )
 
-    total_alerts = db.query(func.count(Event.id)).scalar() or 0
-    unacknowledged_alerts = db.query(func.count(Event.id)).filter(Event.acknowledged == False).scalar() or 0  # noqa: E712
+    visible_events = scope_events(db.query(Event), current_user)
+    total_alerts = visible_events.with_entities(func.count(Event.id)).scalar() or 0
+    unacknowledged_alerts = (
+        visible_events.filter(Event.acknowledged == False)  # noqa: E712
+        .with_entities(func.count(Event.id))
+        .scalar()
+        or 0
+    )
 
     recent_events = (
-        db.query(Event.event_type, Event.camera_id, Event.confidence_score, Event.timestamp)
-        .filter(Event.timestamp >= since)
+        visible_events.filter(Event.timestamp >= since)
+        .with_entities(Event.event_type, Event.camera_id, Event.confidence_score, Event.timestamp)
         .all()
     )
 
@@ -80,11 +93,19 @@ def get_summary(
         for event_type, scores in confidence_by_type.items()
     }
 
-    total_recordings = db.query(func.count(Recording.id)).scalar() or 0
-    total_storage_bytes = db.query(func.coalesce(func.sum(Recording.file_size_bytes), 0)).scalar() or 0
+    visible_recordings = scope_recordings(db.query(Recording), current_user)
+    total_recordings = visible_recordings.with_entities(func.count(Recording.id)).scalar() or 0
+    total_storage_bytes = (
+        visible_recordings.with_entities(func.coalesce(func.sum(Recording.file_size_bytes), 0)).scalar() or 0
+    )
 
+    uploads_query = db.query(VideoUpload)
+    if not current_user.is_operator:
+        uploads_query = uploads_query.filter(VideoUpload.user_id == current_user.id)
     upload_status_counts = dict(
-        db.query(VideoUpload.status, func.count(VideoUpload.id)).group_by(VideoUpload.status).all()
+        uploads_query.with_entities(VideoUpload.status, func.count(VideoUpload.id))
+        .group_by(VideoUpload.status)
+        .all()
     )
     total_uploads = sum(upload_status_counts.values())
 

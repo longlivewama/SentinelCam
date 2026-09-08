@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.core import rate_limit
+from app.core.http_hardening import SecurityHeadersMiddleware, unhandled_exception_handler
 from app.database import Base, SessionLocal, engine
 import app.models  # noqa: F401 - ensures all models are registered on Base.metadata
 from app.models.camera import Camera
@@ -17,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="SentinelCam", version="1.0.0")
 
+# Never "*": credentials are allowed on these requests, and the browser
+# refuses that combination anyway. CORS_ORIGINS is an explicit list.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -24,6 +28,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_exception_handler(Exception, unhandled_exception_handler)
+
+# How often the periodic maintenance task runs (see _maintenance_loop).
+MAINTENANCE_INTERVAL_SECONDS = 600
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(cameras.router, prefix="/api")
@@ -57,6 +66,8 @@ def on_startup():
     # connected WebSocket clients via run_coroutine_threadsafe.
     realtime_broadcaster.bind_loop(asyncio.get_event_loop())
 
+    asyncio.get_event_loop().create_task(_maintenance_loop())
+
     # Resume AI detection for any camera that was left enabled, so
     # surveillance keeps running across restarts without requiring anyone
     # to open that camera's live stream first.
@@ -70,6 +81,21 @@ def on_startup():
                 detection_engine.ensure_running(camera.id, camera.url)
             except Exception:
                 logger.exception("Failed to start detection for camera %s", camera.id)
+
+
+async def _maintenance_loop():
+    """Periodic housekeeping for in-process state that would otherwise
+    only grow. Currently just the auth rate limiter's per-(path, IP)
+    buckets, which are populated by unauthenticated traffic and so are
+    attacker-influenced in size."""
+    while True:
+        await asyncio.sleep(MAINTENANCE_INTERVAL_SECONDS)
+        try:
+            pruned = rate_limit.prune_expired()
+            if pruned:
+                logger.debug("Maintenance: pruned %d expired rate-limit buckets", pruned)
+        except Exception:
+            logger.exception("Maintenance task iteration failed")
 
 
 @app.get("/")

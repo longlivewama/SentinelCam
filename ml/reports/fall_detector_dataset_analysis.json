@@ -1,0 +1,445 @@
+{
+  "dataset_root": "/Users/wama/Documents/SentinelCam/ml/data/fall_detection",
+  "data_yaml": {
+    "nc": 2,
+    "names": [
+      "Fall",
+      "Person"
+    ]
+  },
+  "splits": {
+    "train": {
+      "images": 10767,
+      "label_files": 10767,
+      "images_without_label_file": 0,
+      "label_files_without_image": 0,
+      "corrupt_images": [],
+      "empty_label_images": 0,
+      "total_instances": 16087,
+      "instances_per_class": {
+        "Fall": 3902,
+        "Person": 12185
+      },
+      "images_per_class": {
+        "Fall": 3880,
+        "Person": 6887
+      },
+      "images_with_multiple_classes": 0,
+      "boxes_per_image": {
+        "count": 10767,
+        "min": 1.0,
+        "p25": 1.0,
+        "median": 1.0,
+        "p75": 1.0,
+        "max": 18.0,
+        "mean": 1.4941
+      },
+      "resolutions_top5": [
+        {
+          "wxh": "640x640",
+          "count": 10767
+        }
+      ],
+      "distinct_resolutions": 1,
+      "box_norm_width": {
+        "count": 16087,
+        "min": 0.0039,
+        "p25": 0.1211,
+        "median": 0.25,
+        "p75": 0.457,
+        "max": 1.0,
+        "mean": 0.3179
+      },
+      "box_norm_height": {
+        "count": 16087,
+        "min": 0.0063,
+        "p25": 0.2617,
+        "median": 0.4531,
+        "p75": 0.6844,
+        "max": 1.0,
+        "mean": 0.4801
+      },
+      "box_norm_area": {
+        "count": 16087,
+        "min": 0.0001,
+        "p25": 0.0368,
+        "median": 0.1127,
+        "p75": 0.2734,
+        "max": 1.0,
+        "mean": 0.1927
+      },
+      "box_aspect_ratio_w_over_h": {
+        "count": 16087,
+        "min": 0.0545,
+        "p25": 0.3501,
+        "median": 0.5514,
+        "p75": 0.8814,
+        "max": 56.25,
+        "mean": 0.7018
+      },
+      "size_buckets_at_640px": {
+        "medium": 2487,
+        "large": 13193,
+        "small": 407
+      },
+      "per_class_median_px_area_at_640": {
+        "Fall": 66974.2,
+        "Person": 39062.5
+      },
+      "brightness_sampled": {
+        "count": 400,
+        "min": 15.2467,
+        "p25": 94.373,
+        "median": 114.1097,
+        "p75": 132.4736,
+        "max": 231.0241,
+        "mean": 112.0673
+      },
+      "sharpness_var_laplacian_sampled": {
+        "count": 400,
+        "min": 9.5009,
+        "p25": 199.6729,
+        "median": 325.9946,
+        "p75": 505.2106,
+        "max": 16278.2131,
+        "mean": 450.5337
+      },
+      "annotation_errors": [],
+      "annotation_error_count": 0,
+      "sample_missing_labels": [],
+      "sample_orphan_labels": []
+    },
+    "valid": {
+      "images": 2344,
+      "label_files": 2344,
+      "images_without_label_file": 0,
+      "label_files_without_image": 0,
+      "corrupt_images": [],
+      "empty_label_images": 0,
+      "total_instances": 3458,
+      "instances_per_class": {
+        "Fall": 834,
+        "Person": 2624
+      },
+      "images_per_class": {
+        "Fall": 832,
+        "Person": 1512
+      },
+      "images_with_multiple_classes": 0,
+      "boxes_per_image": {
+        "count": 2344,
+        "min": 1.0,
+        "p25": 1.0,
+        "median": 1.0,
+        "p75": 1.0,
+        "max": 14.0,
+        "mean": 1.4753
+      },
+      "resolutions_top5": [
+        {
+          "wxh": "640x640",
+          "count": 2344
+        }
+      ],
+      "distinct_resolutions": 1,
+      "box_norm_width": {
+        "count": 3458,
+        "min": 0.0156,
+        "p25": 0.1211,
+        "median": 0.2578,
+        "p75": 0.4648,
+        "max": 1.0,
+        "mean": 0.319
+      },
+      "box_norm_height": {
+        "count": 3458,
+        "min": 0.0234,
+        "p25": 0.2635,
+        "median": 0.457,
+        "p75": 0.6914,
+        "max": 1.0,
+        "mean": 0.4839
+      },
+      "box_norm_area": {
+        "count": 3458,
+        "min": 0.0004,
+        "p25": 0.0378,
+        "median": 0.1181,
+        "p75": 0.2629,
+        "max": 1.0,
+        "mean": 0.1927
+      },
+      "box_aspect_ratio_w_over_h": {
+        "count": 3458,
+        "min": 0.0802,
+        "p25": 0.3479,
+        "median": 0.5641,
+        "p75": 0.896,
+        "max": 4.6786,
+        "mean": 0.7028
+      },
+      "size_buckets_at_640px": {
+        "large": 2861,
+        "medium": 523,
+        "small": 74
+      },
+      "per_class_median_px_area_at_640": {
+        "Fall": 70802.2,
+        "Person": 41287.5
+      },
+      "brightness_sampled": {
+        "count": 400,
+        "min": 20.876,
+        "p25": 95.3842,
+        "median": 112.8856,
+        "p75": 128.7947,
+        "max": 227.7825,
+        "mean": 112.2193
+      },
+      "sharpness_var_laplacian_sampled": {
+        "count": 400,
+        "min": 30.9637,
+        "p25": 200.1074,
+        "median": 332.3052,
+        "p75": 552.1095,
+        "max": 7826.7979,
+        "mean": 466.1861
+      },
+      "annotation_errors": [],
+      "annotation_error_count": 0,
+      "sample_missing_labels": [],
+      "sample_orphan_labels": []
+    },
+    "test": {
+      "images": 2328,
+      "label_files": 2328,
+      "images_without_label_file": 0,
+      "label_files_without_image": 0,
+      "corrupt_images": [],
+      "empty_label_images": 0,
+      "total_instances": 4286,
+      "instances_per_class": {
+        "Fall": 834,
+        "Person": 3452
+      },
+      "images_per_class": {
+        "Fall": 833,
+        "Person": 1495
+      },
+      "images_with_multiple_classes": 0,
+      "boxes_per_image": {
+        "count": 2328,
+        "min": 1.0,
+        "p25": 1.0,
+        "median": 1.0,
+        "p75": 2.0,
+        "max": 18.0,
+        "mean": 1.8411
+      },
+      "resolutions_top5": [
+        {
+          "wxh": "640x640",
+          "count": 2328
+        }
+      ],
+      "distinct_resolutions": 1,
+      "box_norm_width": {
+        "count": 4286,
+        "min": 0.0078,
+        "p25": 0.1016,
+        "median": 0.2355,
+        "p75": 0.449,
+        "max": 1.0,
+        "mean": 0.3058
+      },
+      "box_norm_height": {
+        "count": 4286,
+        "min": 0.0195,
+        "p25": 0.2375,
+        "median": 0.4492,
+        "p75": 0.7031,
+        "max": 1.0,
+        "mean": 0.4755
+      },
+      "box_norm_area": {
+        "count": 4286,
+        "min": 0.0002,
+        "p25": 0.0282,
+        "median": 0.1088,
+        "p75": 0.2763,
+        "max": 1.0,
+        "mean": 0.1898
+      },
+      "box_aspect_ratio_w_over_h": {
+        "count": 4286,
+        "min": 0.0624,
+        "p25": 0.3421,
+        "median": 0.5337,
+        "p75": 0.8391,
+        "max": 4.5805,
+        "mean": 0.6695
+      },
+      "size_buckets_at_640px": {
+        "large": 3341,
+        "medium": 757,
+        "small": 188
+      },
+      "per_class_median_px_area_at_640": {
+        "Fall": 71020.0,
+        "Person": 35959.4
+      },
+      "brightness_sampled": {
+        "count": 400,
+        "min": 18.375,
+        "p25": 93.9006,
+        "median": 110.1858,
+        "p75": 128.3939,
+        "max": 198.0123,
+        "mean": 111.1236
+      },
+      "sharpness_var_laplacian_sampled": {
+        "count": 400,
+        "min": 19.2145,
+        "p25": 164.3175,
+        "median": 282.1128,
+        "p75": 459.0576,
+        "max": 2538.6413,
+        "mean": 371.9749
+      },
+      "annotation_errors": [],
+      "annotation_error_count": 0,
+      "sample_missing_labels": [],
+      "sample_orphan_labels": []
+    }
+  },
+  "issues": {},
+  "duplicates": {
+    "exact_or_near_duplicate_pairs": 115,
+    "cross_split_duplicate_pairs": 44,
+    "cross_split_examples": [
+      [
+        "train/A-406-_png_jpg.rf.9494e29bfcd0d3c0c67990aa159bdaf6.jpg",
+        "valid/A-406-_png_jpg.rf.cf8914daf6d52661d1a7bd0a18ae7f82.jpg"
+      ],
+      [
+        "train/C-217-_png_jpg.rf.09d1bde7783ade3bbeb2b82ab89c0081.jpg",
+        "valid/C-17-_png_jpg.rf.a08a2b04950d4a8811f7be561b4e820a.jpg"
+      ],
+      [
+        "train/C-273-_png_jpg.rf.fabbcd004b9a4e4d84df933be5f68559.jpg",
+        "valid/C-236-_png_jpg.rf.b15b05f50c385bc785d4b7528cb2608f.jpg"
+      ],
+      [
+        "train/D-55-_png_jpg.rf.61199cad51720a9a86f44661d895cd19.jpg",
+        "valid/D-55-_png_jpg.rf.4045c25d53b8b1895a2138d5eef72652.jpg"
+      ],
+      [
+        "train/G-12-_png_jpg.rf.08c78e55e46dfac4a989a9853c2ab088.jpg",
+        "valid/G-13-_png_jpg.rf.c48ebf2aa6531fa7aa32aaa836c81d43.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-170147_png.rf.31f232186bf7f9cebb2f5bc9b3485d37.jpg",
+        "valid/Screenshot-2024-02-14-170153_png.rf.9b03970736b512a2e4f9b8e4b651b41e.jpg"
+      ],
+      [
+        "train/cam12227_jpg.rf.3fda22c76e7b0e1ae832f919b2b0c508.jpg",
+        "valid/cam11737_jpg.rf.0ca60c8ff04961ed91b91dc08eb4d357.jpg"
+      ],
+      [
+        "train/cam11914_jpg.rf.d1b14822116201fe6937431053b793cf.jpg",
+        "valid/cam11902_jpg.rf.4da416aac13008045dc2af571cc2c168.jpg"
+      ],
+      [
+        "train/cam11986_jpg.rf.29e35be334322c7161b15fd6a626ef62.jpg",
+        "valid/cam11988_jpg.rf.508de5560f2d4570657b5c088606248a.jpg"
+      ],
+      [
+        "train/cam12237_jpg.rf.d108d5e5511aca05045b095fb8296f3a.jpg",
+        "valid/cam13977_jpg.rf.df220cd010563dc528b5e20d5ba0a0d8.jpg"
+      ],
+      [
+        "train/cam14076_jpg.rf.6d456efd403dbd1d0869c6548273e7ca.jpg",
+        "valid/cam14098_jpg.rf.61a28279c23c5d484294f60fad9f44ac.jpg"
+      ],
+      [
+        "train/cam15570_jpg.rf.440a005ed20e62de83470ccf7e42347a.jpg",
+        "valid/cam15570_jpg.rf.e52203af77bfd069e2f5c979c2f2ce9f.jpg"
+      ],
+      [
+        "train/cam16482_jpg.rf.909f1f8bd94326ba5ceff977bd386afc.jpg",
+        "valid/cam17145_jpg.rf.4e04a5c8ef74120ab40715080ae12d92.jpg"
+      ],
+      [
+        "train/people-2259-_jpg.rf.4472df2c1cad300ba7b5246f2f658610.jpg",
+        "valid/people-2259-_jpg.rf.4168b015f849f1f3784c08591085b990.jpg"
+      ],
+      [
+        "train/people-250-_jpg.rf.0cd66d47fdd871967a5922aaf77f5905.jpg",
+        "valid/people-2704-_jpg.rf.c689eae0112c662a663725c380df7de2.jpg"
+      ],
+      [
+        "train/people-3628-_jpg.rf.0e34b786aa5ef26cefb3b9169a0dccd2.jpg",
+        "valid/people-3628-_jpg.rf.c0e29dd127f59d19ed81148778abfa2c.jpg"
+      ],
+      [
+        "train/people-4572-_jpg.rf.3a86a8fd38b75e922c7f134d26e5457a.jpg",
+        "valid/people-3798-_jpg.rf.5fe8dd0a6dca02af0fbae8a5861d64e6.jpg"
+      ],
+      [
+        "train/people-4112-_jpg.rf.b058addaf1d97711a92a67b0df08ca93.jpg",
+        "valid/people-4112-_jpg.rf.52240d3993e47beecff3039c1de61b7d.jpg"
+      ],
+      [
+        "train/people-3810-_jpg.rf.b287842818d8545992e2f6c3ed1aa2b0.jpg",
+        "valid/people-4593-_jpg.rf.092754c4a874568724b7b8449771bf4e.jpg"
+      ],
+      [
+        "train/people-4502-_jpg.rf.5ea1c21cec0bfcf8d76c04561006a2a2.jpg",
+        "valid/people-4718-_jpg.rf.965eebf8bcceec039ca9a0ca611e303b.jpg"
+      ]
+    ],
+    "within_split_examples": [
+      [
+        "train/C-243-_png_jpg.rf.4b181bbea5bf57d56b6baa4eec32c6a4.jpg",
+        "train/C-243-_png_jpg.rf.71d18c3a1d3877fc645d4aaf3ca0c1dd.jpg"
+      ],
+      [
+        "train/C-273-_png_jpg.rf.fabbcd004b9a4e4d84df933be5f68559.jpg",
+        "train/C-277-_png_jpg.rf.6a84d1e51d82a60f5db84612d30d8ac5.jpg"
+      ],
+      [
+        "train/C-141-_png_jpg.rf.e63bfdb109adf35552ad67de9c1c14bb.jpg",
+        "train/C-43-_png_jpg.rf.1e795853c0ac64643b1af5b78667bc6f.jpg"
+      ],
+      [
+        "train/C-167-_png_jpg.rf.3e3460c79c63699c19e258a68889d9aa.jpg",
+        "train/C-68-_png_jpg.rf.315896d3b37c24ceca527f98dd3d61f9.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-185936_png.rf.03756085d51e439afb168e4d40bdc7b1.jpg",
+        "train/Screenshot-2024-02-14-185941_png.rf.5a939becb6cbfe05bb90f289e3129c3e.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-192422_png.rf.b22055acc02d1f3a9ebda5da60dea0f4.jpg",
+        "train/Screenshot-2024-02-14-192428_png.rf.f565af02421a8c944e1c7b67d9ee8cb2.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-194717_png.rf.db0acb751e8b8e455256c19abe11121f.jpg",
+        "train/Screenshot-2024-02-14-194721_png.rf.8e58d41af0b1d4056b8811c1e5f266ba.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-194943_png.rf.e623052709f895de44eec8f29ccd6c04.jpg",
+        "train/Screenshot-2024-02-14-194946_png.rf.b3a1d5114fc340869fb27ae77a05d7db.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-194932_png.rf.967172ef2ab0d1461559b97d85e6efd5.jpg",
+        "train/Screenshot-2024-02-14-194950_png.rf.5b17e68cb69c81c1c7ab1238d69f7c96.jpg"
+      ],
+      [
+        "train/Screenshot-2024-02-14-194932_png.rf.967172ef2ab0d1461559b97d85e6efd5.jpg",
+        "train/Screenshot-2024-02-14-195004_png.rf.7d94331c1445afd3fc2046ccca1b2393.jpg"
+      ]
+    ],
+    "method": "64-bit dHash, exact hash collision (identical or visually near-identical)"
+  }
+}

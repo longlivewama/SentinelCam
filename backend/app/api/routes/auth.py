@@ -122,11 +122,26 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db))
     if user is None or not user.is_active:
         raise invalid_exception
 
+    now = datetime.now(timezone.utc)
     user.password_hash = hash_password(payload.new_password)
-    reset_row.used_at = datetime.now(timezone.utc)
+    reset_row.used_at = now
+
+    # Burn every other outstanding reset token for this account, not just
+    # the one presented. Requesting a reset several times (or an attacker
+    # requesting one for a victim) leaves multiple live tokens; consuming
+    # one must not leave the others usable against the new password.
+    _invalidate_outstanding_reset_tokens(db, user.id, now)
+
     db.commit()
 
     return {"message": "Password has been reset successfully. You can now sign in with your new password."}
+
+
+def _invalidate_outstanding_reset_tokens(db: Session, user_id: int, now: datetime) -> None:
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user_id,
+        PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": now}, synchronize_session=False)
 
 
 def _frontend_reset_url() -> str:
@@ -155,6 +170,9 @@ def update_settings(
 
     if payload.new_password:
         current_user.password_hash = hash_password(payload.new_password)
+        # A user who just changed their password deliberately should not
+        # leave a live "forgot password" link in their mailbox.
+        _invalidate_outstanding_reset_tokens(db, current_user.id, datetime.now(timezone.utc))
 
     db.commit()
     db.refresh(current_user)
