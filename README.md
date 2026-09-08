@@ -58,22 +58,28 @@ dashboard in realtime, and emails the on-call recipients.
 **How it works, end to end:**
 
 1. A camera stream (or an uploaded video) is decoded frame by frame.
-2. Each frame goes through YOLOv8 pose estimation to extract human keypoints.
-3. A fall detector evaluates posture, keypoint alignment and hip velocity, and only fires after
-   an on-ground posture is **sustained** for ≥1.2 s — so bending down or sitting doesn't trigger it.
+2. Each processed frame goes through a **fine-tuned YOLOv8 fall detector** — a single-class model
+   trained for this project on 11k images (see [the model card](ml/MODEL_CARD.md)) — which locates
+   fallen people directly. A YOLOv8 pose model runs alongside it for person counting and for the
+   fallback heuristic.
+3. A single frame never raises an alert. A detection must **persist for the same tracked subject**
+   before an event fires (0.6 s for the trained model, 1.2 s of sustained on-ground posture for the
+   heuristic fallback), so bending down or sitting doesn't trigger it, and one bad frame can't
+   either.
 4. A firing event snapshots a rolling pre-event buffer, appends post-event frames, and writes a
    playable MP4 clip plus a still snapshot.
-5. The event is persisted, pushed to every connected browser over a WebSocket, and emailed out.
+5. The event is persisted — with its **position in the footage**, its confidence, and which
+   detector produced it — pushed to the browsers entitled to see it over a WebSocket, and emailed out.
 6. Operators review, play back and acknowledge alerts from the web UI.
 
 The same detection code path serves both live cameras and uploaded files — only the frame source
 and the timeline differ — which is what keeps the "analyse this video" feature honest: it is the
 production detector running, not a separate demo path.
 
-> **Scope note.** This is an engineering project, not a certified medical or safety device. The
-> fall detector is a well-tuned heuristic over a production pose model, with a trained
-> corroborating classifier and a YOLO fall detector in the pipeline. Accuracy claims are kept
-> deliberately narrow throughout this README and in [`ml/README.md`](ml/README.md).
+> **Scope note.** This is an engineering project, **not a certified medical or safety device**.
+> The trained detector scores mAP@50 0.877 on a held-out test split of stills; it has **not** been
+> evaluated on video, and not against realistic floor-level hard negatives. Those limits are
+> spelled out in [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) and must be read before any operational use.
 
 ---
 
@@ -132,7 +138,7 @@ flowchart TB
     subgraph workers["Processing — background threads"]
         STREAM["Stream manager<br/>one capture thread per camera"]
         UPLOAD["Video analysis worker<br/>frame-by-frame single pass"]
-        DET["Detection engine<br/>YOLOv8-Pose → FallDetector<br/>+ optional ONNX classifier"]
+        DET["Detection engine<br/>trained YOLO fall detector<br/>+ YOLOv8-Pose (heuristic fallback)"]
         REC["Recording engine<br/>pre/post-event clip writer"]
     end
 
@@ -167,10 +173,13 @@ or as a `?token=` query parameter, because browsers cannot attach custom headers
 `<video src>`, `<a href>` downloads or the native WebSocket API — so the MJPEG stream, video
 playback, downloads and the realtime socket authenticate via the URL instead.
 
-**Authorization.** Three roles enforced by FastAPI dependencies (`require_admin`,
-`require_operator`) on every mutating endpoint. `admin` has full access including user management;
+**Authorization.** Two layers. *Role* gates, enforced by FastAPI dependencies (`require_admin`,
+`require_operator`) on every mutating endpoint: `admin` has full access including user management;
 `operator` manages cameras, acknowledges alerts and analyses video; `viewer` is read-only plus
-upload/analysis. The frontend's route guards and hidden buttons are a UX convenience, **not** the
+upload/analysis. And *row-level* scoping (`app/core/scoping.py`), which decides who may see a
+given alert, clip or realtime event: anything derived from a user's uploaded video belongs to that
+user, anything from a shared camera is visible to every authenticated user, and operators see
+everything. The frontend's route guards and hidden buttons are a UX convenience, **not** the
 security boundary.
 
 **Streaming.** Each camera gets one lazily-started background thread owning the
@@ -181,11 +190,17 @@ without opening a second capture connection per viewer.
 **Recording.** That same thread keeps a rolling buffer of the last ~3 seconds of raw frames. When
 a detector fires, the recording engine snapshots the buffer, appends ~3 more seconds of live
 frames, and writes the combined clip (`avc1`/H.264, falling back to `mp4v`), records it in the
-database, and dispatches an email alert with the snapshot attached.
+database, and dispatches an email alert with the snapshot attached. Events store which detector
+fired them and, for uploads, the fall's **position in the source footage** — so the results screen
+can seek the video to the moment itself rather than showing the time the analysis ran.
 
 **Realtime.** An in-process pub/sub broadcaster over a single WebSocket endpoint lets background
 worker threads push `alert.created`, `camera.status`, `upload.progress` and `upload.completed`
-events to every connected tab instantly — no polling.
+events to connected tabs instantly — no polling. Delivery is **scoped per subscriber**, using the
+same ownership rule as the REST API: camera events go to everyone, upload events only to the
+uploader and to operators. The socket also closes itself when the token it was opened with
+expires, since a long-lived connection cannot re-authorize per message the way an HTTP request
+can.
 
 ---
 
@@ -371,7 +386,12 @@ file is gitignored, and only `.env.example` templates are committed.
 | `NOTIFICATION_CHANNELS` | Comma-separated enabled channels (`email` works out of the box) |
 | `SMTP_*`, `ALERT_RECIPIENTS` | Email delivery configuration |
 | `UPLOADS_DIR`, `MAX_UPLOAD_SIZE_MB`, `ALLOWED_VIDEO_EXTENSIONS` | Video upload limits |
-| `FALL_CLASSIFIER_MODEL_PATH` | Optional path to the exported ONNX classifier (empty = heuristic-only, the default) |
+| `MAX_UPLOAD_STORAGE_PER_USER_MB` | Per-account storage quota (0 disables it) |
+| `MAX_CONCURRENT_VIDEO_ANALYSES` | Upper bound on simultaneous upload analyses; the rest queue |
+| `FALL_DETECTOR_MODEL_PATH` | The trained fall detector. Defaults to the committed artifact; empty forces the pose heuristic |
+| `FALL_DETECTION_MODE` | `auto` \| `model` \| `heuristic` \| `hybrid` — see [Machine learning](#machine-learning-models--datasets) |
+| `FALL_DETECTOR_MIN_CONFIDENCE`, `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` | Detection threshold and how long a detection must persist before it alerts |
+| `FALL_CLASSIFIER_MODEL_PATH` | Optional path to the earlier ONNX keypoint classifier (empty = off, the default) |
 | `AUTH_*_MAX_REQUESTS` / `AUTH_*_WINDOW_SECONDS` | Per-IP rate limits on signup, login, forgot-password and reset-password |
 | `VITE_API_URL` *(frontend)* | Backend base URL; the WebSocket URL is derived from it automatically |
 
@@ -382,12 +402,12 @@ The full commented list lives in [`.env.example`](.env.example),
 
 ## Testing
 
-**142 automated tests across three suites**, all currently passing, plus a four-job CI pipeline.
+**251 automated tests across three suites**, all currently passing, plus a four-job CI pipeline.
 
 | Suite | Count | What it covers |
 |---|---:|---|
-| **Backend** (pytest) | **69** | Security primitives, fall-detection logic, classifier, auth & RBAC, cameras, alerts, recordings, video uploads, analytics, system status, rate limiting, Alembic migrations, email notifier, WebSocket auth, and one real end-to-end video analysis through actual YOLO inference |
-| **Frontend** (Vitest + Testing Library) | **57** | Auth pages, route guards, upload workflow (drag-drop, validation, progress, delete), dashboard, Zustand stores |
+| **Backend** (pytest) | **159** | Security primitives, fall-detection logic (both the trained-model gate and the pose heuristic), the committed model artifact's contract, cross-user isolation, auth & RBAC, cameras, alerts, recordings, upload validation, HTTP Range handling, realtime delivery scoping, analytics, rate limiting, Alembic migrations + schema-drift detection, email notifier, and an end-to-end video analysis over a real decoded video |
+| **Frontend** (Vitest + Testing Library) | **76** | Auth pages, route guards, upload workflow (drag-drop, validation, progress, delete), the results screen's in-video timestamps and detector labelling, system status including the model-fallback warning, dashboard, formatting helpers, Zustand stores |
 | **End-to-end** (Playwright) | **16** | Real Chromium against the real Docker Compose stack — signup, login, logout, forgot/reset password (reading the actual email out of Mailpit's API), camera CRUD + RBAC, alert acknowledgement, recording playback, and the full upload → process → view-results workflow |
 | **Docker** | 4 services | `postgres`, `backend`, `frontend`, `mailpit` — all healthy under `docker compose up` |
 
@@ -420,59 +440,95 @@ No coverage percentage is published here, because none has been measured.
 ## Machine learning: models & datasets
 
 The `ml/` directory is a **standalone training pipeline**. It is not imported by the running
-backend — it produces model artifacts the backend can optionally load. Two tracks live there:
+backend — it produces the model artifacts the backend loads.
 
-### 1. Keypoint fall classifier (shipped artifact)
+### The production fall detector
 
-- **Task:** binary classification over pose-keypoint features.
-- **Why keypoints, not raw images:** a small feature-based model trains and runs cheaply on CPU,
-  and is far less prone to memorising backgrounds than an image classifier on a small dataset.
-- **Artifacts:** [`ml/exported/fall_classifier_v1.onnx`](ml/exported/) plus metadata **are
-  committed** — they are small and are the deliverable of that pipeline.
-- **Integration:** set `FALL_CLASSIFIER_MODEL_PATH` to the ONNX file. It acts only as a confidence
-  adjustment on top of the heuristic's sustained-duration gate — it can never bypass that gate.
-- **Honesty caveat:** its headline metrics come from a small, narrow, largely synthetic dataset
-  and are explicitly flagged in [`ml/README.md`](ml/README.md) as likely inflated by
-  domain-shortcut learning. Treat it as an experimental corroborating signal, not a validated
-  production model.
+**`ml/exported/fall_detector_v1.pt` — YOLOv8n, single class `Fall`, 5.4 MB.** This is the model
+the application runs. Full details, honest limitations and reproduction steps live in
+**[`ml/MODEL_CARD.md`](ml/MODEL_CARD.md)**; the short version:
 
-### 2. YOLO fall detector (in progress)
+| | Precision | Recall | mAP@50 | mAP@50-95 |
+|---|---:|---:|---:|---:|
+| Validation (2,189 images) | 0.812 | 0.710 | 0.826 | 0.528 |
+| **Held-out test (2,176 images)** | **0.846** | **0.800** | **0.877** | **0.557** |
 
-- **Task:** single-class (`Fall`) object detection.
-- **Model family:** YOLOv8n, fine-tuned from COCO pretrained weights at 640 px.
-- **Why nano:** deployment is CPU-bound and already runs two YOLO models per frame per camera; the
-  dataset analysis showed one class, a median of one object per image, and ~82 % "large" objects by
-  COCO convention — capacity is not the binding constraint, data quality is. A YOLOv8s run exists
-  as a controlled comparison so the size choice rests on a measurement, not an assumption.
-- **Dataset:** a public Roboflow fall-detection export, downloaded and prepared by
-  `ml/detector/download_dataset.py` and `ml/detector/prepare_dataset.py`, with a dataset analysis
-  report generated before any training decisions were made.
-- **Augmentation, chosen from that analysis rather than defaults:** the class is defined by
-  *orientation relative to gravity*, so vertical flips are disabled outright and rotation/shear are
-  kept near zero — augmentations that rotate an upright person toward horizontal would manufacture
-  false positives in the training signal. Horizontal flip is kept (a fall is left-right symmetric).
-- **Training workflow:** `download_dataset.py` → `analyze_dataset.py` → `prepare_dataset.py` →
-  `train.py`, with a stratified smoke-test subset available for fast iteration before a full run.
+Trained for 80 epochs (18.5 h on Apple Silicon) from COCO-pretrained weights on a public Roboflow
+fall-detection dataset (CC BY 4.0), prepared into 11,074 train / 2,189 val / 2,176 test images.
+Test scores sit slightly *above* validation across all four metrics — no sign of overfitting, and
+307 near-duplicate images were moved out of val/test into train first so the test split is
+genuinely held out.
+
+Two preparation decisions shape what this model is, and both came out of a dataset analysis run
+*before* any training ([`ml/reports/fall_detector_dataset_analysis.md`](ml/reports/fall_detector_dataset_analysis.md)):
+
+- **The raw export's second class, `Person`, was dropped.** Not one image of 15,439 contained both
+  a `Fall` and a `Person` box — `Person` was entirely PASCAL VOC, `Fall` entirely separate fall
+  datasets. A two-class detector could have scored well by learning *which dataset an image came
+  from*. Dropping `Person` removes the shortcut and repurposes those 6,887 VOC images as background
+  negatives: examples of upright people that must not fire.
+- **Augmentation follows from the task, not from defaults.** This class is defined by orientation
+  relative to gravity, so vertical flips are disabled outright and rotation is capped at 5°;
+  anything more would rotate standing people into lying poses while keeping the "not a fall" label.
+  Mosaic is kept at 1.0 precisely *because* no source image contains both a fall and an upright
+  person — compositing four images synthesises the co-occurrence the dataset structurally lacks.
+
+**Known limitations, stated plainly:** no video-level evaluation (all metrics are per-frame on
+stills), no hard-negative validation against floor-level activity like sit-ups or crouching, and
+source data that is not care-home footage. See the model card's Limitations section in full before
+deploying it anywhere real.
+
+### Integration
+
+```
+frame ─▶ fall_object_detector.detect()   YOLO inference, conf ≥ 0.4
+      ─▶ ModelFallDetector.update()       tracking + sustain gate + debounce
+      ─▶ Event(detector, confidence, video_timestamp_seconds)
+```
+
+| Setting | Default | Effect |
+|---|---|---|
+| `FALL_DETECTOR_MODEL_PATH` | `ml/exported/fall_detector_v1.pt` | Empty forces the pose heuristic |
+| `FALL_DETECTION_MODE` | `auto` | `auto` \| `model` \| `heuristic` \| `hybrid` |
+| `FALL_DETECTOR_MIN_CONFIDENCE` | `0.4` | Per-box confidence floor |
+| `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` | `0.6` | How long a detection must persist |
+
+`auto` runs the trained model when it loads and falls back to the pose heuristic when it doesn't,
+so a deployment without the checkpoint still detects falls. That fallback is **never silent**:
+`GET /api/system/status` and the System Status page report both the configured and the *active*
+mode, and flag the degradation explicitly.
+
+Inference costs ~120 ms per 640 px frame on CPU. For live cameras this is a *third* model per
+processed frame alongside pose and object detection — budget for it, or raise
+`DETECTION_FRAME_STRIDE`.
+
+### The earlier keypoint classifier (secondary, disabled by default)
+
+`ml/exported/fall_classifier_v1.onnx` is a 10-feature keypoint MLP from an earlier iteration. It is
+**not** the production detector and has a much weaker standing: its 1.000 test metrics are flagged
+in [`ml/reports/eval_report.md`](ml/reports/eval_report.md) as likely domain-shortcut artifacts. It
+was only ever wired in as a confidence nudge on top of the heuristic's gate, never as a source of
+truth, and remains off unless `FALL_CLASSIFIER_MODEL_PATH` is set.
 
 ### What is and is not in this repository
 
 | Artifact | In Git? | Why |
 |---|---|---|
-| Keypoint-classifier training, evaluation and export **source code** | ✅ | The reproducible part |
-| YOLO detector pipeline source (`ml/detector/`) | ⏳ | Lands with the completed training run |
-| Exported keypoint classifier (`ml/exported/*.onnx`, `*.pt`, metadata) | ✅ | Small, and the actual deliverable |
-| Training **datasets** (`ml/data/…`) | ❌ | Large and redistributable only under their own licences — re-fetch with the download scripts |
-| Training **runs & checkpoints** (`ml/runs/`) | ❌ | Large binaries; a selected artifact gets promoted to `ml/exported/` instead |
+| Detector + classifier pipeline source (`ml/detector/`, `ml/scripts/`) | ✅ | The reproducible part |
+| **Trained fall detector** (`ml/exported/fall_detector_v1.pt` + metadata) | ✅ | 5.4 MB — the actual deliverable, so a fresh clone runs the real model |
+| Detector metrics: results CSV, PR/F1 curves, confusion matrices | ✅ | So the model card's numbers are checkable without retraining |
+| Exported keypoint classifier (`ml/exported/fall_classifier_v1.*`) | ✅ | Small, and the deliverable of that earlier pipeline |
+| Training **datasets** (`ml/data/…`) | ❌ | Large, redistributable only under their own licences — re-fetch with the download scripts |
+| Training **runs & checkpoints** (`ml/runs/`) | ❌ | ~16 MB per run of per-epoch checkpoints and batch mosaics; the selected artifact is promoted to `ml/exported/` |
 | Training **logs** (`ml/logs/`) | ❌ | Machine-local noise |
 | Auto-downloaded YOLO base weights (`*.pt` at repo root) | ❌ | Fetched on demand by Ultralytics |
 
-So: **the trained YOLO fall-detector weights are intentionally not distributed here.** Reproduce
-them with the scripts in `ml/detector/`, or point the backend at your own artifact. That detector
-pipeline is under active development and lands in this repository together with the results of its
-first full training run — the section above describes design decisions already made and measured,
-not code you can run from a fresh clone today.
-See [`ml/README.md`](ml/README.md) for the full methodology, dataset licences, split strategy and
-evaluation discussion.
+The committed weights are fine-tuned from **AGPL-3.0** Ultralytics COCO weights on a **CC BY 4.0**
+dataset — see [`NOTICE.md`](NOTICE.md) before any commercial use or redistribution.
+
+Reproduce the model with `download_dataset.py` → `analyze_dataset.py` → `prepare_dataset.py` →
+`train.py` in `ml/detector/` (a stratified smoke-test subset is available for fast iteration). Do
+not overwrite `fall_detector_v1.pt`; promote a retrained model as `v2` alongside it.
 
 ---
 
@@ -531,12 +587,23 @@ public issue for security reports.
 
 ## Roadmap
 
-Planned work, none of it implemented yet:
+Recently completed:
 
-- [ ] **Persist in-video fall timestamps** so uploaded-video results can deep-link to the exact
-      moment of each detection.
-- [ ] **Finish and integrate the YOLO fall detector** as a first-class detector alongside the pose
-      heuristic, with a published held-out evaluation.
+- [x] **Trained YOLO fall detector integrated as the primary detector**, with a published
+      held-out evaluation — see [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md).
+- [x] **In-video fall timestamps persisted**, so uploaded-video results seek to the exact moment
+      of each detection rather than showing a wall-clock time.
+- [x] **Row-level authorization** on alerts, recordings, analytics and the realtime channel.
+
+Planned:
+
+- [ ] **Video-level model evaluation** — the largest remaining gap. Every published metric is
+      per-frame on stills; the numbers that matter operationally (falls detected per fall that
+      occurred, false alerts per hour of ordinary footage) require a labelled fall *video* corpus
+      and are currently unmeasured.
+- [ ] **Hard-negative validation** — evaluate against realistic floor-level activity (sit-ups,
+      crouching, a child playing, someone lying on a sofa), none of which the current test split
+      contains.
 - [ ] **Inference performance** — batched/strided frame processing and optional GPU acceleration
       for faster analysis of long recordings.
 - [ ] **Horizontally scalable realtime** — move the rate limiter and event broadcaster to Redis so
@@ -545,6 +612,8 @@ Planned work, none of it implemented yet:
 - [ ] **More notification channels** — SMS and WhatsApp providers behind the existing interfaces.
 - [ ] **Observability** — structured logging, metrics and health dashboards.
 - [ ] **Model version management** — track, compare and roll back deployed detector versions.
+      The artifact + metadata sidecar convention (`fall_detector_v1.pt` alongside
+      `fall_detector_v1.metadata.json`) is the groundwork; a registry and a UI are not.
 - [ ] **Deployment reference** — a documented production deploy (managed Postgres, object storage
       for clips, TLS termination).
 
@@ -554,9 +623,12 @@ Planned work, none of it implemented yet:
 
 Stated plainly, because they matter when reading the rest of this document:
 
-1. **In-video fall offsets are not persisted.** An analysed upload reports *that* a fall was
-   detected and produces the clip, but the exact in-video timestamp is not stored on the event
-   record, so the UI cannot yet seek to it.
+1. **The fall detector has never been evaluated on video.** Its published metrics (precision
+   0.846 / recall 0.800 / mAP@50 0.877 on a held-out test split) are **per frame, on still
+   images**. Per-*incident* recall is certainly higher — a real fall is sampled dozens of times —
+   but it is not measured, and neither is the false-alert rate over ordinary footage. It also has
+   no validation against floor-level hard negatives (sit-ups, crouching, lying on a sofa). See
+   [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) for the full list.
 2. **Deleting a video while it is being analysed is an unresolved backend race.** The analysis
    worker and the delete endpoint can interleave; the failure is contained (the worker records a
    failed status rather than crashing the service), but the correct fix — cooperative cancellation
@@ -566,8 +638,9 @@ Stated plainly, because they matter when reading the rest of this document:
    host is doing.
 4. **Violence, crowd and abandoned-object detectors are heuristics**, not trained models — a known
    and documented scope boundary, not an accidental gap.
-5. **The fall classifier's metrics are optimistic.** Small, narrow, largely synthetic dataset; see
-   [`ml/README.md`](ml/README.md).
+5. **The earlier keypoint classifier's metrics are optimistic** — small, narrow, largely
+   synthetic dataset; see [`ml/README.md`](ml/README.md). It is off by default and is not the
+   production detector.
 6. **Single-process assumptions.** The in-memory rate limiter and realtime broadcaster are
    per-process; multi-worker deployment needs a shared backing store.
 7. **E2E coverage boundaries.** The Playwright suite does not cover live-camera streaming (no

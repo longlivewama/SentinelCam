@@ -30,15 +30,30 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# YOLO weights (yolov8n.pt / yolov8n-pose.pt) are intentionally NOT baked
-# in here - ultralytics auto-downloads them on first use, same as the
+# The base YOLO weights (yolov8n.pt / yolov8n-pose.pt) are intentionally
+# NOT baked in - ultralytics auto-downloads them on first use, same as the
 # non-Docker dev setup (see README's "YOLO model weights" note). This
-# keeps the image small and the Dockerfile simple; it does mean the first
-# detection request needs network access.
+# keeps the image small; it does mean the first detection request needs
+# network access. The TRAINED fall detector is different: it is mounted
+# read-only at /models by docker-compose (see FALL_DETECTOR_MODEL_PATH),
+# so the image stays generic and the model can be swapped without a rebuild.
+
+# The server process runs as an unprivileged user. It is NOT set with a
+# `USER` directive: the entrypoint has to start as root to take ownership
+# of the mounted storage volumes (Docker only seeds ownership into an
+# EMPTY volume) before dropping privileges - see docker-entrypoint.sh.
+RUN useradd --create-home --uid 10001 sentinelcam \
+    && mkdir -p /app/storage/recordings /app/storage/snapshots /app/storage/uploads \
+    && chown -R sentinelcam:sentinelcam /app /home/sentinelcam
+# Ultralytics and matplotlib both write caches to $HOME on first use; point
+# them at the app user's home so neither tries to write into a root-owned path.
+ENV YOLO_CONFIG_DIR=/home/sentinelcam/.config/Ultralytics \
+    MPLCONFIGDIR=/home/sentinelcam/.cache/matplotlib
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=5 \
     CMD curl -f http://localhost:8000/health || exit 1
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

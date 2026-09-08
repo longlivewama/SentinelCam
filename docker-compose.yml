@@ -1,6 +1,11 @@
+# `docker compose up --build` brings up the whole stack. Values come from a
+# root .env (see .env.example); every service restarts unless explicitly
+# stopped, so a crashed container or a host reboot doesn't silently leave
+# surveillance offline.
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: sentinelcam
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinelcam}
@@ -21,13 +26,23 @@ services:
   # suite (see e2e/README.md) to fetch the password-reset link.
   mailpit:
     image: axllent/mailpit:latest
+    restart: unless-stopped
     ports:
       - "${MAILPIT_SMTP_PORT:-1025}:1025"
       - "${MAILPIT_WEB_PORT:-8025}:8025"
+    healthcheck:
+      # Mailpit's own liveness endpoint. Without this the backend could
+      # start before the SMTP listener was accepting connections, and the
+      # first alert email of the run would fail.
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   backend:
     build:
       context: ./backend
+    restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
@@ -43,6 +58,13 @@ services:
       SMTP_FROM: alerts@sentinelcam.local
       ALERT_RECIPIENTS: ${ALERT_RECIPIENTS:-ops@example.com}
       MODEL_DEVICE: cpu
+      # The trained fall detector, mounted read-only below. FALL_DETECTION_MODE
+      # "auto" degrades to the pose heuristic if the file is missing; set it
+      # to "model" if you would rather see a visible failure in
+      # /api/system/status than a quiet downgrade.
+      FALL_DETECTOR_MODEL_PATH: ${FALL_DETECTOR_MODEL_PATH:-/models/fall_detector_v1.pt}
+      FALL_DETECTION_MODE: ${FALL_DETECTION_MODE:-auto}
+      MAX_CONCURRENT_VIDEO_ANALYSES: ${MAX_CONCURRENT_VIDEO_ANALYSES:-2}
       # Auth rate limits. Defaults here are the production values; the e2e
       # suite overrides them (see e2e/global-setup.js) because it drives
       # many signups/logins from a single client IP.
@@ -58,21 +80,38 @@ services:
       - recordings_data:/app/storage/recordings
       - snapshots_data:/app/storage/snapshots
       - uploads_data:/app/storage/uploads
+      # Read-only: the trained checkpoint is an input to the container, and
+      # nothing in the app has any reason to write to it.
+      - ./ml/exported:/models:ro
     depends_on:
       postgres:
         condition: service_healthy
       mailpit:
-        condition: service_started
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # Inference is CPU-bound and video decoding is memory-hungry; an
+          # unbounded backend can starve postgres on the same host. Raise
+          # these for a real deployment sized to its camera count - see
+          # README's Deployment section.
+          cpus: "${BACKEND_CPU_LIMIT:-4.0}"
+          memory: ${BACKEND_MEMORY_LIMIT:-4g}
 
   frontend:
     build:
       context: ./frontend
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-5173}:80"
     depends_on:
-      - backend
+      # Wait for the backend to pass its healthcheck, not merely to have
+      # been created - otherwise the SPA can be served (and its first API
+      # calls fail) while migrations are still running.
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:
