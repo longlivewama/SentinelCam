@@ -1,0 +1,30 @@
+{
+  "source": "/Users/wama/Documents/SentinelCam/ml/data/fall_detection",
+  "output": "/Users/wama/Documents/SentinelCam/ml/data/fall_detection_prepared",
+  "dup_radius": 6,
+  "leaked_images_moved_to_train": 307,
+  "splits": {
+    "train": {
+      "images": 11074,
+      "fall_instances": 4210,
+      "dropped_person_instances": 12185,
+      "background_images": 6887,
+      "positive_images": 4187,
+      "moved_in_from_leak": 307
+    },
+    "valid": {
+      "images": 2189,
+      "fall_instances": 679,
+      "dropped_person_instances": 2624,
+      "background_images": 1512,
+      "positive_images": 677
+    },
+    "test": {
+      "images": 2176,
+      "fall_instances": 681,
+      "dropped_person_instances": 3452,
+      "background_images": 1495,
+      "positive_images": 681
+    }
+  }
+}

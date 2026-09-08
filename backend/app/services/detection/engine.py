@@ -11,7 +11,9 @@ background daemon thread:
     single frame is unnecessary and expensive on CPU; this is a tunable),
   - runs the shared pose model once (feeds both fall + violence
     detection) and the shared object model once (feeds both crowd +
-    abandoned-object detection) per processed frame,
+    abandoned-object detection) per processed frame - plus, when the
+    trained fall detector is enabled (see detection/fall_pipeline.py), a
+    third shared model that produces the fall signal directly,
   - feeds the results to each of the four detector modules,
   - and calls recording_engine.trigger_event(...) whenever a detector
     fires, which takes care of writing the clip, persisting the Recording
@@ -36,8 +38,7 @@ from app.database import SessionLocal
 from app.models.camera import Camera
 from app.services import recording_engine
 from app.services.stream_manager import stream_manager
-from app.services.detection.fall_classifier import fall_classifier
-from app.services.detection.fall_detection import FallDetector
+from app.services.detection.fall_pipeline import FallPipeline
 from app.services.detection.violence_detection import ViolenceDetector
 from app.services.detection.crowd_detection import CrowdDetector
 from app.services.detection.abandoned_object_detection import AbandonedObjectDetector
@@ -111,7 +112,8 @@ class DetectionEngine:
             logger.error("No stream for camera %s; detection loop exiting", camera_id)
             return
 
-        fall_detector = FallDetector()
+        fall_pipeline = FallPipeline()
+        logger.info("Camera %s: fall detection running in %r mode", camera_id, fall_pipeline.mode)
         violence_detector = ViolenceDetector()
         crowd_detector = CrowdDetector()
         abandoned_detector = AbandonedObjectDetector()
@@ -140,7 +142,7 @@ class DetectionEngine:
 
             try:
                 self._process_frame(
-                    camera_id, frame, fall_detector, violence_detector,
+                    camera_id, frame, fall_pipeline, violence_detector,
                     crowd_detector, abandoned_detector,
                     crowd_threshold, abandoned_object_seconds,
                 )
@@ -150,19 +152,17 @@ class DetectionEngine:
             time.sleep(poll_interval)
 
     def _process_frame(
-        self, camera_id, frame, fall_detector, violence_detector,
+        self, camera_id, frame, fall_pipeline, violence_detector,
         crowd_detector, abandoned_detector, crowd_threshold, abandoned_object_seconds,
     ):
         people = self.extract_people(frame)
 
-        classifier_scores = None
-        if fall_classifier.is_available:
-            frame_height, frame_width = frame.shape[:2]
-            classifier_scores = fall_classifier.score_people(people, frame_width, frame_height)
-
-        for fall_event in fall_detector.update(people, classifier_scores=classifier_scores):
+        for fall_event in fall_pipeline.update(frame, people):
             logger.info("Camera %s: FALL detected %s", camera_id, fall_event)
-            recording_engine.trigger_event(camera_id, "fall", fall_event.get("confidence", 1.0))
+            recording_engine.trigger_event(
+                camera_id, "fall", fall_event.get("confidence", 1.0),
+                detector=fall_event.get("detector", "heuristic"),
+            )
 
         for violence_event in violence_detector.update(people):
             logger.info("Camera %s: VIOLENCE detected %s", camera_id, violence_event)

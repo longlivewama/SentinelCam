@@ -11,13 +11,18 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import defaultdict
-from typing import Dict, List
+from collections import defaultdict, deque
+from typing import Deque, Dict
 
 from fastapi import HTTPException, Request, status
 
 _lock = threading.Lock()
-_hits: Dict[str, List[float]] = defaultdict(list)
+# deque, not list: expiring old hits pops from the FRONT, which is O(n)
+# on a list and O(1) here. Entries are dropped once a key's window
+# empties (see below) - keeping them would mean one permanently retained
+# entry per (path, client IP) ever seen, i.e. unbounded memory growth
+# driven entirely by unauthenticated traffic.
+_hits: Dict[str, Deque[float]] = defaultdict(deque)
 
 
 def rate_limit(max_requests: int, window_seconds: float):
@@ -25,6 +30,11 @@ def rate_limit(max_requests: int, window_seconds: float):
     requests per client IP per 60-second sliding window for this route."""
 
     def _check(request: Request):
+        # request.client.host is the immediate peer. Behind a reverse
+        # proxy or load balancer that is the proxy, so every client shares
+        # one bucket - deploy with the proxy configured to preserve the
+        # client address (and this app behind a trusted-proxy middleware)
+        # before relying on these limits in production. See SECURITY.md.
         client_ip = request.client.host if request.client else "unknown"
         key = f"{request.url.path}:{client_ip}"
         now = time.monotonic()
@@ -33,9 +43,13 @@ def rate_limit(max_requests: int, window_seconds: float):
             hits = _hits[key]
             cutoff = now - window_seconds
             while hits and hits[0] < cutoff:
-                hits.pop(0)
+                hits.popleft()
 
             if len(hits) >= max_requests:
+                # Leave the key in place: it still holds live hits, and
+                # dropping it here would reset the window on every
+                # rejection - turning the limiter off exactly when it is
+                # being exercised.
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Too many requests. Please try again later.",
@@ -44,3 +58,15 @@ def rate_limit(max_requests: int, window_seconds: float):
             hits.append(now)
 
     return _check
+
+
+def prune_expired(max_window_seconds: float = 3600.0):
+    """Drops keys whose most recent hit is older than any window in use.
+    Called from the periodic maintenance task in main.py so a long-running
+    process doesn't accumulate an entry per client IP indefinitely."""
+    now = time.monotonic()
+    with _lock:
+        stale = [key for key, hits in _hits.items() if not hits or (now - hits[-1]) > max_window_seconds]
+        for key in stale:
+            del _hits[key]
+    return len(stale)

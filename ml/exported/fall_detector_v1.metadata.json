@@ -1,0 +1,118 @@
+{
+  "name": "fall_detector_v1",
+  "task": "object detection (single class)",
+  "architecture": "YOLOv8n",
+  "framework": {
+    "ultralytics": "8.3.0",
+    "torch": "2.14.0"
+  },
+  "class_names": {
+    "0": "Fall"
+  },
+  "input": {
+    "imgsz": 640,
+    "channels": 3,
+    "layout": "BGR frame as read by OpenCV"
+  },
+  "parameters": 3157200,
+  "fused_parameters": 2684563,
+  "gflops": 6.8,
+  "file": {
+    "path": "ml/exported/fall_detector_v1.pt",
+    "size_bytes": 5626678,
+    "sha256": "da38c55f24bb6a634d202e84e6e08087982fe38f4bb0c134aa813e4ce7a06ba0",
+    "source_run": "ml/runs/fall_yolov8n/weights/best.pt"
+  },
+  "training": {
+    "base_model": "yolov8n.pt",
+    "epochs_requested": 80,
+    "epochs_completed": 80,
+    "best_epoch_by_map50_95": 77,
+    "batch": 32,
+    "imgsz": 640,
+    "device": "mps",
+    "seed": 42,
+    "optimizer": "auto (SGD, lr0=0.01, momentum=0.937, weight_decay=0.0005)",
+    "wall_clock_seconds": 66588.7,
+    "augmentation": {
+      "hsv_h": 0.015,
+      "hsv_s": 0.7,
+      "hsv_v": 0.4,
+      "degrees": 5.0,
+      "translate": 0.1,
+      "scale": 0.5,
+      "shear": 0.0,
+      "perspective": 0.0,
+      "flipud": 0.0,
+      "fliplr": 0.5,
+      "mosaic": 1.0,
+      "close_mosaic": 10,
+      "mixup": 0.0,
+      "copy_paste": 0.0
+    }
+  },
+  "dataset": {
+    "source": "Roboflow tfmbigdata2025/voc-fall-person_falls v1 (CC BY 4.0)",
+    "prepared_by": "ml/detector/prepare_dataset.py",
+    "single_class": "the raw export's 'Person' class was dropped; VOC images kept as background negatives",
+    "splits": {
+      "train": {
+        "images": 11074,
+        "fall_instances": 4210,
+        "background_images": 6887
+      },
+      "valid": {
+        "images": 2189,
+        "fall_instances": 679,
+        "background_images": 1512
+      },
+      "test": {
+        "images": 2176,
+        "fall_instances": 681,
+        "background_images": 1495
+      }
+    },
+    "leakage_handling": "307 near-duplicate images moved into train"
+  },
+  "metrics": {
+    "validation": {
+      "precision": 0.8116,
+      "recall": 0.7099,
+      "mAP50": 0.8257,
+      "mAP50_95": 0.5279,
+      "fitness": 0.5577
+    },
+    "test_held_out": {
+      "precision": 0.846,
+      "recall": 0.8003,
+      "mAP50": 0.8774,
+      "mAP50_95": 0.5574,
+      "fitness": 0.5894
+    },
+    "note": "Both measured with ml/exported/fall_detector_v1.pt at imgsz=640 on CPU. The validation figures reproduce the training run's final epoch exactly, confirming this artifact is the checkpoint that produced them."
+  },
+  "inference": {
+    "device_supported": [
+      "cpu",
+      "mps",
+      "cuda"
+    ],
+    "measured_cpu_ms_per_image": 121.2,
+    "measured_on": "Apple Silicon, CPU execution, imgsz=640, batch=16",
+    "default_confidence_threshold": 0.4
+  },
+  "integration": {
+    "loader": "backend/app/services/detection/fall_object_detector.py",
+    "temporal_gate": "backend/app/services/detection/fall_detection.py::ModelFallDetector",
+    "strategy_selection": "backend/app/services/detection/fall_pipeline.py",
+    "settings": [
+      "FALL_DETECTOR_MODEL_PATH",
+      "FALL_DETECTION_MODE",
+      "FALL_DETECTOR_MIN_CONFIDENCE",
+      "FALL_DETECTOR_MIN_SUSTAINED_SECONDS"
+    ]
+  },
+  "license": {
+    "weights": "Derived from Ultralytics YOLOv8 COCO weights (AGPL-3.0) fine-tuned on a CC BY 4.0 dataset. See NOTICE.md before commercial use."
+  }
+}

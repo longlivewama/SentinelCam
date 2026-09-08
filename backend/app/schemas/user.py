@@ -6,9 +6,24 @@ from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 from app.models.user import VALID_ROLES
 
 
+MIN_PASSWORD_LENGTH = 8
+# bcrypt hashes at most the first 72 BYTES of a password and ignores the
+# rest. Accepting longer input would mean two different passwords sharing
+# a hash whenever they agree on that prefix - and passlib's bcrypt backend
+# raises on over-length input in some versions, which would surface to the
+# user as a 500 rather than a validation error. Rejecting at the boundary
+# makes the limit explicit instead of silent.
+MAX_PASSWORD_BYTES = 72
+
+
 def _validate_password_strength(password: str) -> str:
-    if len(password) < 8:
-        raise ValueError("Password must be at least 8 characters long")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters long")
+    if len(password.encode("utf-8")) > MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"Password must be at most {MAX_PASSWORD_BYTES} bytes long "
+            "(non-ASCII characters count as more than one byte)"
+        )
     return password
 
 

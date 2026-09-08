@@ -19,7 +19,27 @@ class Event(Base):
 
     event_type = Column(String, nullable=False)  # "fall" | "violence" | "abandoned_object" | "crowd"
     confidence_score = Column(Float, nullable=False, default=0.0)
+
+    # Wall-clock time the event was *recorded*. For a live camera this is
+    # also when it happened; for an uploaded video it is when the analysis
+    # reached that moment, which says nothing about where in the footage
+    # the fall occurred - that is video_timestamp_seconds below. The UI
+    # must not present this as a position within the video.
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Offset, in seconds from the start of the source file, at which the
+    # event was detected. Only meaningful for events from an uploaded
+    # video (video_upload_id set); null for live-camera events, which
+    # have no such timeline.
+    video_timestamp_seconds = Column(Float, nullable=True)
+
+    # Which detection strategy produced this event - "model" (the trained
+    # YOLO fall detector) or "heuristic" (the pose/geometry detectors).
+    # Null on rows written before this column existed. Operators need this
+    # to interpret a confidence score: the two strategies compute it
+    # differently and are not comparable.
+    detector = Column(String, nullable=True)
+
     triggered_recording = Column(Boolean, nullable=False, default=False)
 
     acknowledged = Column(Boolean, nullable=False, default=False)

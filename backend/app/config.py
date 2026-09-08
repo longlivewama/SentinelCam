@@ -98,6 +98,12 @@ class Settings(BaseSettings):
 
     # --- Video upload ---
     MAX_UPLOAD_SIZE_MB: int = 500
+
+    # Total bytes of uploaded video one account may hold at once. Without
+    # a cap, a single user can fill the disk one within-limit upload at a
+    # time and take recording + analysis down for everyone. Set to 0 to
+    # disable the quota.
+    MAX_UPLOAD_STORAGE_PER_USER_MB: int = 5000
     ALLOWED_VIDEO_EXTENSIONS: str = ".mp4,.mov,.avi,.mkv,.webm"
 
     @property
@@ -125,6 +131,47 @@ class Settings(BaseSettings):
     # it as a corroborating signal alongside the pose heuristic. Left
     # empty, fall detection runs on the heuristic alone.
     FALL_CLASSIFIER_MODEL_PATH: str = ""
+
+    # --- Trained fall detector (the primary fall signal) ---
+    # Path to the fine-tuned single-class YOLO "Fall" detector produced by
+    # ml/detector/train.py and promoted to ml/exported/fall_detector_v1.pt
+    # (see ml/MODEL_CARD.md). Unlike FALL_CLASSIFIER_MODEL_PATH above -
+    # a keypoint MLP that only nudges confidence - this model detects
+    # fallen people directly and, when loaded, becomes the source of truth
+    # for fall events. Points at the committed artifact by default so a
+    # fresh checkout runs the real model with no extra configuration;
+    # set to "" to force the pose heuristic instead.
+    FALL_DETECTOR_MODEL_PATH: str = str(BASE_DIR.parent / "ml" / "exported" / "fall_detector_v1.pt")
+
+    # Which fall-detection strategy to run:
+    #   "auto"      - the trained detector when it loads, else the pose
+    #                 heuristic (default; degrades gracefully).
+    #   "model"     - trained detector only; no fall events at all if it
+    #                 cannot be loaded.
+    #   "heuristic" - pose heuristic only, ignoring the trained detector.
+    #   "hybrid"    - run both and report the union of their events
+    #                 (higher recall, more false positives - see
+    #                 ml/MODEL_CARD.md before enabling in production).
+    FALL_DETECTION_MODE: str = "auto"
+
+    # Minimum per-box confidence for the trained detector's output to be
+    # considered at all. 0.4 sits just below the F1-optimal operating
+    # point measured in ml/MODEL_CARD.md; the sustained-duration gate
+    # below is what actually suppresses one-frame false positives.
+    FALL_DETECTOR_MIN_CONFIDENCE: float = 0.4
+
+    # How long a "Fall" box must persist for the same tracked subject
+    # before an event fires. Shorter than the pose heuristic's 1.2s gate
+    # because the model recognises the posture directly rather than
+    # inferring it from a geometric proxy, but still long enough that a
+    # single bad frame cannot raise an alert.
+    FALL_DETECTOR_MIN_SUSTAINED_SECONDS: float = 0.6
+
+    # Upper bound on video-upload analyses running at once. Each one
+    # decodes a video and runs inference on a background thread, so
+    # unbounded concurrency is a straightforward way to exhaust CPU and
+    # memory; further uploads queue instead (status stays "pending").
+    MAX_CONCURRENT_VIDEO_ANALYSES: int = 2
 
     # --- Streaming / recording ---
     STREAM_FPS: int = 30
