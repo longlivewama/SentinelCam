@@ -19,6 +19,7 @@ progress.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -38,6 +39,7 @@ from app.models.video_upload import (
     STATUS_PROCESSING,
     VideoUpload,
 )
+from app.services.cascade_delete import stage_delete_video_upload
 from app.services.detection.engine import detection_engine
 from app.services.detection.fall_pipeline import FallPipeline
 from app.services.detection.video_scan import open_video, scan_video
@@ -49,6 +51,17 @@ logger = logging.getLogger(__name__)
 
 PRE_EVENT_SECONDS = 3
 POST_EVENT_SECONDS = 3
+
+# Mid-loop check for services/video_uploads.py's DELETE endpoint having
+# flipped deletion_requested, so a long video stops decoding promptly
+# after the user asks to delete it rather than running to completion
+# first. Throttled (real wall-clock time, not video time or frame count)
+# so this never becomes the "database polling" the fix is explicitly
+# meant to avoid - one query per second of wall clock regardless of fps,
+# stride or video length. This is an optimization, not the correctness
+# gate: _finalize_if_deletion_requested (below) is what actually decides
+# an upload's fate, under a row lock, at every point that matters.
+CANCEL_CHECK_INTERVAL_SECONDS = 1.0
 
 # Every accepted upload gets its own worker thread immediately, but only
 # MAX_CONCURRENT_VIDEO_ANALYSES of them may be decoding + running
@@ -73,6 +86,14 @@ def _set_status(video_upload_id: int, **fields):
         upload = db.query(VideoUpload).filter(VideoUpload.id == video_upload_id).first()
         if upload is None:
             return
+        # Already flagged for deletion: don't write progress to it, and
+        # above all don't broadcast that progress. The API stopped
+        # returning this upload the moment the flag was set, so an
+        # `upload.progress` event naming it is at best noise and at worst
+        # something a client could use to re-add a row the user just
+        # deleted. Free to check - the row is already loaded here.
+        if upload.deletion_requested:
+            return
         for key, value in fields.items():
             setattr(upload, key, value)
         db.commit()
@@ -93,12 +114,85 @@ def _set_status(video_upload_id: int, **fields):
         )
 
 
+def _deletion_requested(video_upload_id: int) -> bool:
+    """Cheap, throttled, lock-free check used mid-loop purely to stop
+    analysing promptly once deletion has been requested. Not the
+    correctness gate - see _finalize_if_deletion_requested - just an
+    optimization so a long video doesn't keep decoding for several more
+    seconds after the user asked to delete it. Treats a row that has
+    already vanished the same as one flagged for deletion, since either
+    way there is nothing left to analyse for."""
+    with SessionLocal() as db:
+        flag = (
+            db.query(VideoUpload.deletion_requested)
+            .filter(VideoUpload.id == video_upload_id)
+            .scalar()
+        )
+    return flag is None or bool(flag)
+
+
+def _finalize_if_deletion_requested(video_upload_id: int) -> bool:
+    """The actual correctness gate. Called at every point the worker is
+    about to commit an outcome for this upload - before marking it
+    completed, before recording a failure, and (from _write_upload_clip)
+    before persisting a fall's Recording/Event rows - so none of those
+    writes can land on an upload the user asked to delete.
+
+    Locks the row with SELECT ... FOR UPDATE, which is what actually
+    closes the race rather than just narrowing it: the DELETE endpoint's
+    flag flip is a plain UPDATE on the same row, so Postgres serializes
+    the two against each other automatically. Whichever of the two
+    commits first is authoritative, and the other sees that committed
+    result once its lock is granted - there is no window in between where
+    both proceed on stale information. The lock is held only for this one
+    short read-then-maybe-delete transaction, never across a video's
+    decode or encode time.
+
+    If the upload is gone or flagged, performs the actual cascade-delete
+    the DELETE endpoint deferred (the same helper it uses for an
+    already-terminal upload) and returns True. Returns False, having
+    touched nothing, if the upload is still live - the caller should
+    proceed with its own outcome normally.
+    """
+    with SessionLocal() as db:
+        upload = (
+            db.query(VideoUpload)
+            .filter(VideoUpload.id == video_upload_id)
+            .with_for_update()
+            .first()
+        )
+        if upload is None:
+            return True
+        if not upload.deletion_requested:
+            return False
+        paths = stage_delete_video_upload(db, upload)
+        db.commit()
+
+    for path in paths:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                logger.warning(
+                    "Could not remove %s while finalizing deleted upload %s", path, video_upload_id,
+                )
+    return True
+
+
 def _run(video_upload_id: int):
     with _analysis_slots:
         _run_guarded(video_upload_id)
 
 
 def _run_guarded(video_upload_id: int):
+    # Covers "deleted before analysis started" and "deleted while queued
+    # on the concurrency semaphore": if this upload was already flagged
+    # (or is already gone) by the time its turn comes up, finish the
+    # deletion now and never open the video file at all.
+    if _finalize_if_deletion_requested(video_upload_id):
+        logger.info("Video upload %s was deleted before analysis started; nothing to do", video_upload_id)
+        return
+
     with SessionLocal() as db:
         upload = db.query(VideoUpload).filter(VideoUpload.id == video_upload_id).first()
         if upload is None:
@@ -113,15 +207,34 @@ def _run_guarded(video_upload_id: int):
 
     started = time.monotonic()
     try:
-        _process(video_upload_id, stored_path, original_filename)
+        completed = _process(video_upload_id, stored_path, original_filename)
     except Exception as exc:
         logger.exception(
             "Video analysis failed for upload %s after %.1fs", video_upload_id, time.monotonic() - started,
         )
+        # The exception may well BE the deletion race (e.g. the source
+        # file disappearing mid-decode) rather than a genuine failure -
+        # check before recording one, so a deleted upload doesn't
+        # resurface with a "failed" status and a "your analysis failed"
+        # email nobody should receive for a video that no longer exists.
+        if _finalize_if_deletion_requested(video_upload_id):
+            logger.info(
+                "Video upload %s: analysis raised %s, but the upload had been deleted; cleaned up instead "
+                "of recording a failure",
+                video_upload_id, type(exc).__name__,
+            )
+            return
         # str(exc) reaches the user via error_message, so it must stay a
         # description of what went wrong - never a traceback or a path.
         _set_status(video_upload_id, status=STATUS_FAILED, error_message=str(exc)[:500])
         return
+
+    if not completed:
+        # _process only returns False after finalizing the deletion
+        # itself (see its final lines) - nothing left to do here.
+        logger.info("Video upload %s: analysis stopped, upload was deleted mid-analysis", video_upload_id)
+        return
+
     elapsed = time.monotonic() - started
 
     with SessionLocal() as db:
@@ -137,7 +250,11 @@ def _run_guarded(video_upload_id: int):
         notification_service.notify_video_analysis_complete(uploader_email, original_filename, fall_count)
 
 
-def _process(video_upload_id: int, stored_path: str, original_filename: str):
+def _process(video_upload_id: int, stored_path: str, original_filename: str) -> bool:
+    """Returns True if analysis reached the end of the video and the
+    upload was marked completed; False if it was deleted mid-analysis
+    (deletion has already been fully finalized - row, files and all -
+    before this returns)."""
     detection_engine.ensure_models()
 
     # Frame iteration, stride and video-timeline arithmetic live in
@@ -167,8 +284,17 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str):
     max_concurrent_persons = 0
     fall_events = []  # list of {"timestamp_seconds", "confidence"}
     last_reported_percent = -1
+    cancelled = False
+    last_cancel_check = time.monotonic()
 
     for scanned in scan_video(cap, properties, fall_pipeline, detection_engine.extract_people):
+        now_wall = time.monotonic()
+        if now_wall - last_cancel_check >= CANCEL_CHECK_INTERVAL_SECONDS:
+            last_cancel_check = now_wall
+            if _deletion_requested(video_upload_id):
+                cancelled = True
+                break
+
         frame = scanned.frame
         raw_buffer.append(frame)
 
@@ -178,10 +304,17 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str):
             clip["frames"].append(frame.copy())
             clip["remaining"] -= 1
             if clip["remaining"] <= 0:
-                _write_upload_clip(video_upload_id, clip["frames"], fps, clip["event"])
+                if not _write_upload_clip(video_upload_id, clip["frames"], fps, clip["event"]):
+                    # The upload was deleted between the fall firing and
+                    # this clip finishing its post-event buffer - the
+                    # write was discarded rather than persisted. Nothing
+                    # further in this video matters either.
+                    cancelled = True
             else:
                 still_pending.append(clip)
         pending_clips = still_pending
+        if cancelled:
+            break
 
         if scanned.processed:
             max_concurrent_persons = max(max_concurrent_persons, len(scanned.people))
@@ -210,11 +343,23 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str):
                 last_reported_percent = percent
                 _set_status(video_upload_id, progress_percent=percent)
 
-    # Flush any clips still collecting post-event frames when the video ends.
-    for clip in pending_clips:
-        _write_upload_clip(video_upload_id, clip["frames"], fps, clip["event"])
+    # Flush any clips still collecting post-event frames when the video
+    # ends - skipped once cancelled, since every one of them would just
+    # be encoded and then discarded by _write_upload_clip's own check.
+    if not cancelled:
+        for clip in pending_clips:
+            if not _write_upload_clip(video_upload_id, clip["frames"], fps, clip["event"]):
+                cancelled = True
 
     cap.release()
+
+    # The authoritative check, regardless of how we got here: whether the
+    # loop broke early, ran to completion, or was cancelled right on its
+    # last iteration, this is what actually decides - under a row lock -
+    # whether the upload still exists to be marked completed. Also covers
+    # deletion requested in the instant after the last periodic check.
+    if _finalize_if_deletion_requested(video_upload_id):
+        return False
 
     with SessionLocal() as db:
         upload = db.query(VideoUpload).filter(VideoUpload.id == video_upload_id).first()
@@ -239,11 +384,31 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str):
                 },
                 owner_user_id=upload.user_id,
             )
+    return True
 
 
-def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: dict):
+def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: dict) -> bool:
+    """Encodes one fall's pre/post-event buffer to disk and records it as
+    a Recording + Event. Returns False, having written nothing to the
+    database, if the upload was deleted or flagged for deletion - the
+    caller (_process) treats that as its own signal to stop analysing.
+
+    This is the exact call site the original race broke: without the
+    check below, a fall detected after the user deleted the upload would
+    try to INSERT a Recording/Event whose video_upload_id no longer
+    existed, raising an IntegrityError from inside the analysis thread.
+    """
     if not frames:
-        return
+        return True
+
+    # Cheap pre-check: skip the encode entirely in the common case where
+    # deletion was already noticed (or requested well before this clip's
+    # post-event buffer finished filling) - no point spending CPU on
+    # frames nobody will keep. Not itself the correctness gate; the
+    # locked check below is, for the narrow window this can still miss.
+    if _deletion_requested(video_upload_id):
+        return False
+
     height, width = frames[0].shape[:2]
     fps_int = max(int(round(fps)), 1)
 
@@ -258,7 +423,7 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
     codec_used, writer = recording_engine_mod.open_writer(str(file_path), width, height, fps_int)
     if writer is None:
         logger.error("Could not open VideoWriter with any codec for %s", file_path)
-        return
+        return True
 
     for frame in frames:
         writer.write(frame)
@@ -280,6 +445,38 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
     )
 
     with SessionLocal() as db:
+        # The authoritative check, in the SAME transaction as the INSERTs
+        # below and under a row lock: this is what actually closes the
+        # race rather than just narrowing it. SELECT ... FOR UPDATE
+        # serializes against the DELETE endpoint's flag-flip UPDATE on
+        # this same row (a plain UPDATE also takes a row lock), so
+        # whichever of the two commits first is authoritative and the
+        # other sees that committed result once unblocked - there is no
+        # window where both proceed on stale information. The lock is
+        # held only for this one short transaction, never across the
+        # encode above.
+        upload = (
+            db.query(VideoUpload)
+            .filter(VideoUpload.id == video_upload_id)
+            .with_for_update()
+            .first()
+        )
+        if upload is None or upload.deletion_requested:
+            db.rollback()
+            file_path.unlink(missing_ok=True)
+            snapshot_path.unlink(missing_ok=True)
+            logger.info(
+                "Video upload %s was deleted mid-analysis; discarding this fall clip instead of persisting it",
+                video_upload_id,
+            )
+            return False
+
+        # Captured now, while `upload` is still attached and unexpired -
+        # db.commit() below would otherwise force a second round-trip to
+        # re-fetch exactly what we already hold the row locked for.
+        source_name = upload.original_filename
+        owner_user_id = upload.user_id
+
         recording = Recording(
             camera_id=None,
             video_upload_id=video_upload_id,
@@ -312,10 +509,6 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
         db.refresh(event_row)
         db.refresh(recording)
 
-        upload = db.query(VideoUpload).filter(VideoUpload.id == video_upload_id).first()
-        source_name = upload.original_filename if upload else f"upload-{video_upload_id}"
-        owner_user_id = upload.user_id if upload else None
-
         realtime_broadcaster.publish(
             "alert.created",
             {
@@ -338,3 +531,4 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
         timestamp=event_timestamp,
         snapshot_path=str(snapshot_path),
     )
+    return True
