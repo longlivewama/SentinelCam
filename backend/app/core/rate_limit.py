@@ -9,12 +9,15 @@ counters here would otherwise be per-process and under-count.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import defaultdict, deque
 from typing import Deque, Dict
 
 from fastapi import HTTPException, Request, status
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 # deque, not list: expiring old hits pops from the FRONT, which is O(n)
@@ -50,6 +53,10 @@ def rate_limit(max_requests: int, window_seconds: float):
                 # dropping it here would reset the window on every
                 # rejection - turning the limiter off exactly when it is
                 # being exercised.
+                logger.warning(
+                    "Rate limit hit: %s from %s (%d requests in %.0fs)",
+                    request.url.path, client_ip, max_requests, window_seconds,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail="Too many requests. Please try again later.",

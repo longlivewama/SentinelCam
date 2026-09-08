@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -110,16 +111,27 @@ def _run_guarded(video_upload_id: int):
 
     _set_status(video_upload_id, status=STATUS_PROCESSING, started_at=datetime.now(timezone.utc), progress_percent=0)
 
+    started = time.monotonic()
     try:
         _process(video_upload_id, stored_path, original_filename)
     except Exception as exc:
-        logger.exception("Video analysis failed for upload %s", video_upload_id)
+        logger.exception(
+            "Video analysis failed for upload %s after %.1fs", video_upload_id, time.monotonic() - started,
+        )
+        # str(exc) reaches the user via error_message, so it must stay a
+        # description of what went wrong - never a traceback or a path.
         _set_status(video_upload_id, status=STATUS_FAILED, error_message=str(exc)[:500])
         return
+    elapsed = time.monotonic() - started
 
     with SessionLocal() as db:
         upload = db.query(VideoUpload).filter(VideoUpload.id == video_upload_id).first()
         fall_count = upload.fall_events_count if upload else 0
+
+    logger.info(
+        "Video analysis complete for upload %s: %d fall event(s) in %.1fs of wall clock",
+        video_upload_id, fall_count, elapsed,
+    )
 
     if uploader_email:
         notification_service.notify_video_analysis_complete(uploader_email, original_filename, fall_count)
