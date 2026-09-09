@@ -417,13 +417,20 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
 
     event_timestamp = datetime.now(timezone.utc)
     ts_str = event_timestamp.strftime("%Y%m%dT%H%M%S%f")
-    filename = f"{ts_str}_fall.mp4"
-    file_path = clip_dir / filename
-
-    codec_used, writer = recording_engine_mod.open_writer(str(file_path), width, height, fps_int)
+    # Extension is advisory - open_writer swaps in whatever container the
+    # codec it actually opened requires (WebM where this build has no
+    # H.264 encoder), and returns the real path. The Recording row must
+    # store THAT, or the clip endpoint 404s on a file that is right there
+    # under a different suffix.
+    codec_used, writer, written_path = recording_engine_mod.open_writer(
+        str(clip_dir / f"{ts_str}_fall.mp4"), width, height, fps_int,
+    )
     if writer is None:
-        logger.error("Could not open VideoWriter with any codec for %s", file_path)
+        logger.error("Could not open VideoWriter with any codec for upload %s", video_upload_id)
         return True
+
+    file_path = Path(written_path)
+    filename = file_path.name
 
     for frame in frames:
         writer.write(frame)

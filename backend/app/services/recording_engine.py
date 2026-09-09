@@ -11,7 +11,9 @@ this module:
   2. Keeps collecting live frames from the stream for POST_EVENT_SECONDS
      more seconds.
   3. Concatenates pre+post frames and writes them out via cv2.VideoWriter
-     to storage/recordings/{camera_id}/{event_timestamp}_{trigger_action}.mp4
+     to storage/recordings/{camera_id}/{event_timestamp}_{trigger_action}.EXT,
+     where EXT is the container required by the first codec in
+     `_CODEC_LADDER` that this build can actually open - see `open_writer`.
   4. Persists a Recording row, a snapshot JPEG, an Event row, and sends an
      alert email.
 
@@ -23,6 +25,7 @@ responsibility of each detector module, not this one.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -97,21 +100,74 @@ def _handle_event(camera_id: int, trigger_action: str, confidence_score: float, 
         logger.exception("Failed to persist recording for camera %s event %s", camera_id, trigger_action)
 
 
+# Codec ladder, best browser compatibility first. Each entry is the
+# fourcc plus the container extension it must be muxed into - FFmpeg
+# selects the muxer from the file extension, so the two cannot be chosen
+# independently.
+#
+# Why this order, and why WebM is in it at all: a clip nobody can play is
+# not a recording. `avc1` (H.264 in MP4) is the ideal - universally
+# playable - but the PyPI `opencv-python-headless` wheels ship an FFmpeg
+# built WITHOUT libx264 (it is GPL, so the wheels deliberately omit it),
+# and there is no hardware encoder inside a container. Every H.264 fourcc
+# therefore fails to open in the default deployment, which is exactly
+# what the logs showed:
+#
+#     h264_v4l2m2m: Could not find a valid device
+#     ... fallback to use tag 'mp4v'
+#
+# `mp4v` (MPEG-4 Part 2) opens fine, which is why it was silently chosen
+# - but Chrome, Firefox and Edge cannot DECODE it. The clip downloaded,
+# the range requests returned 206, and the <video> element still showed
+# nothing. VP9/VP8 in WebM are supported by every current browser AND are
+# present in the stock wheel's FFmpeg, so they are the first rungs that
+# actually work here. `mp4v` is kept as the last resort: still the wrong
+# answer for a browser, but better than failing to record at all, and it
+# is now only ever reached if nothing above it opened.
+_CODEC_LADDER = (
+    ("avc1", ".mp4"),    # H.264 - ideal, needs a libx264-enabled FFmpeg
+    ("vp09", ".webm"),   # VP9  - Chrome/Firefox/Edge, Safari 14.1+
+    ("VP80", ".webm"),   # VP8  - widest legacy browser support
+    ("mp4v", ".mp4"),    # MPEG-4 Part 2 - NOT browser-playable, last resort
+)
+
+
 def open_writer(path: str, width: int, height: int, fps: int):
-    """Try 'avc1' (H.264, browser-compatible) first; fall back to 'mp4v'
-    if it fails to open. Whether avc1 is available depends entirely on the
-    OpenCV/ffmpeg build in the deployment environment - many stock
-    opencv-python wheels do not bundle a licensed H.264 encoder, in which
-    case we transparently fall back to MPEG-4 ('mp4v'), which is less
-    broadly compatible (notably with Safari) but works everywhere OpenCV
-    does. Which codec was actually used is logged for operators."""
-    for codec in ("avc1", "mp4v"):
-        fourcc = cv2.VideoWriter_fourcc(*codec)
-        writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
+    """Opens a VideoWriter using the most browser-compatible codec this
+    OpenCV/FFmpeg build actually supports.
+
+    `path`'s extension is advisory: it is replaced with whichever
+    container the chosen codec requires, so callers must use the returned
+    path rather than the one they passed in.
+
+    Returns `(codec, writer, path)`, or `(None, None, None)` if no codec
+    opened. Which codec was used is logged for operators.
+    """
+    base = os.path.splitext(path)[0]
+
+    for codec, extension in _CODEC_LADDER:
+        candidate = base + extension
+        writer = cv2.VideoWriter(candidate, cv2.VideoWriter_fourcc(*codec), fps, (width, height))
         if writer.isOpened():
-            return codec, writer
+            if codec == "mp4v":
+                logger.warning(
+                    "Recording %s with mp4v: no browser-playable encoder was available in this "
+                    "build, so this clip will not play in Chrome/Firefox/Edge. Install an FFmpeg "
+                    "with libx264 (or VP8/VP9) support to fix playback.",
+                    candidate,
+                )
+            return codec, writer, candidate
+
         writer.release()
-    return None, None
+        # A failed open can still leave a zero-byte file behind; removing
+        # it stops a stray empty .mp4 sitting next to the real .webm.
+        if os.path.exists(candidate) and os.path.getsize(candidate) == 0:
+            try:
+                os.remove(candidate)
+            except OSError:
+                pass
+
+    return None, None, None
 
 
 def _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector="heuristic"):
@@ -122,13 +178,18 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
     camera_dir.mkdir(parents=True, exist_ok=True)
 
     ts_str = event_timestamp.strftime("%Y%m%dT%H%M%S%f")
-    filename = f"{ts_str}_{trigger_action}.mp4"
-    file_path = camera_dir / filename
-
-    codec_used, writer = open_writer(str(file_path), width, height, fps)
+    # Extension is advisory - open_writer swaps in whatever container the
+    # codec it actually managed to open requires, and returns the real
+    # path. Recording rows must store THAT, not this.
+    codec_used, writer, written_path = open_writer(
+        str(camera_dir / f"{ts_str}_{trigger_action}.mp4"), width, height, fps,
+    )
     if writer is None:
-        logger.error("Could not open VideoWriter with any codec for %s", file_path)
+        logger.error("Could not open VideoWriter with any codec for camera %s event %s", camera_id, trigger_action)
         return
+
+    file_path = Path(written_path)
+    filename = file_path.name
 
     for frame in all_frames:
         writer.write(frame)

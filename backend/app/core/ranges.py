@@ -19,12 +19,32 @@ what this does.
 """
 from __future__ import annotations
 
+import os
 from typing import NamedTuple, Optional
 
 from fastapi import Request, Response, status
 from fastapi.responses import StreamingResponse
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB
+
+# Clips are written in whatever container the deployment's FFmpeg can
+# actually encode (see recording_engine.open_writer), so the served
+# Content-Type has to follow the file rather than being assumed. Serving
+# a WebM as video/mp4 makes browsers refuse to decode a file they
+# otherwise play perfectly.
+_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+}
+DEFAULT_MEDIA_TYPE = "video/mp4"
+
+
+def media_type_for(file_path: str) -> str:
+    """Content-Type for a stored clip, from its container extension."""
+    return _MEDIA_TYPES.get(os.path.splitext(file_path)[1].lower(), DEFAULT_MEDIA_TYPE)
 
 
 class ByteRange(NamedTuple):
@@ -90,15 +110,19 @@ def parse_range_header(range_header: Optional[str], file_size: int) -> Optional[
 def serve_file_range(
     file_path: str,
     request: Request,
-    media_type: str = "video/mp4",
+    media_type: Optional[str] = None,
 ) -> Response:
     """Serves `file_path`, honouring a Range header when present. Used by
     both the recording-clip and uploaded-source-video endpoints, which had
     identical (and identically buggy) copies of this logic.
 
     Callers must have already resolved and authorized `file_path` - this
-    function does no access control and no path resolution."""
-    import os
+    function does no access control and no path resolution.
+
+    `media_type` defaults to whatever the file's container implies, so a
+    WebM clip is not announced as video/mp4."""
+    if media_type is None:
+        media_type = media_type_for(file_path)
 
     file_size = os.path.getsize(file_path)
 

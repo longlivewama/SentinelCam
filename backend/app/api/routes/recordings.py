@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_operator
-from app.core.ranges import serve_file_range
+from app.core.ranges import media_type_for, serve_file_range
 from app.core.scoping import can_access_upload_id, scope_recordings
 from app.database import get_db
 from app.models.recording import Recording
@@ -108,7 +108,9 @@ def download_recording(
 
     return FileResponse(
         path=file_path,
-        media_type="video/mp4",
+        # Follows the container the clip was actually encoded into - see
+        # recording_engine.open_writer; not every clip is an MP4.
+        media_type=media_type_for(file_path),
         filename=recording.filename,
         content_disposition_type="attachment",
     )

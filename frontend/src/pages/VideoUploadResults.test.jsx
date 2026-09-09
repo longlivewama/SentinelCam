@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import VideoUpload from './VideoUpload'
@@ -155,5 +155,100 @@ describe('VideoUpload results screen', () => {
       expect(screen.getByText(/could not load the fall events/i)).toBeInTheDocument()
     })
     expect(screen.queryByText(/no fall events detected/i)).not.toBeInTheDocument()
+  })
+  // --- playback failure surfacing -------------------------------------
+  //
+  // These cover a real incident: fall clips were encoded as MPEG-4 Part 2
+  // ("mp4v"), which no current browser decodes, while the H.264 source
+  // played fine. Every backend layer was healthy - correct rows, files on
+  // disk, 206 range responses - so the only visible symptom was a silent
+  // black player, which reads as "the results didn't load". The encoder is
+  // fixed, but the player must never fail silently again.
+
+  it('reports a clip that the browser cannot play instead of showing a blank player', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    const clip = document.querySelectorAll('video')[1]
+    fireEvent.error(clip)
+
+    expect(await screen.findByText(/this video could not be played/i)).toBeInTheDocument()
+    expect(screen.getByText(/cannot decode/i)).toBeInTheDocument()
+  })
+
+  it('reports a source video that fails to load', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    fireEvent.error(document.querySelector('video'))
+
+    expect(await screen.findByText(/this video could not be played/i)).toBeInTheDocument()
+  })
+
+  it('keeps the working clips playable when one of them fails', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    const before = document.querySelectorAll('video').length
+    fireEvent.error(document.querySelectorAll('video')[1])
+
+    await screen.findByText(/this video could not be played/i)
+    // Exactly one player was replaced by the message; the rest still render.
+    expect(document.querySelectorAll('video')).toHaveLength(before - 1)
+  })
+
+  it('requests metadata up front so a broken clip fails fast rather than hanging', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    for (const video of document.querySelectorAll('video')) {
+      expect(video.getAttribute('preload')).toBe('metadata')
+    }
+  })
+
+  // --- results are actually fetched for a completed upload --------------
+
+  it('fetches both recordings and alerts for the upload it was opened for', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    const calls = apiClient.get.mock.calls
+    const recordingsCall = calls.find(([url]) => url === '/api/recordings')
+    const alertsCall = calls.find(([url]) => url === '/api/alerts')
+
+    expect(recordingsCall[1].params).toEqual({ video_upload_id: 7 })
+    expect(alertsCall[1].params).toEqual({ video_upload_id: 7, event_type: 'fall' })
+  })
+
+  it('points each player at the right clip, carrying the auth token', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    const sources = [...document.querySelectorAll('video')].map((v) => v.getAttribute('src'))
+
+    expect(sources[0]).toBe('http://localhost:8000/api/video-uploads/7/video?token=tok')
+    // Falls render in footage order: recording 12 (0:12) before 11 (4:05).
+    expect(sources[1]).toBe('http://localhost:8000/api/recordings/12/video?token=tok')
+    expect(sources[2]).toBe('http://localhost:8000/api/recordings/11/video?token=tok')
+  })
+
+  it('says no falls were detected when a completed upload genuinely has none', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch({ events: [], recordings: [] })
+    await openDetail(user)
+
+    expect(await screen.findByText(/no fall events detected/i)).toBeInTheDocument()
   })
 })
