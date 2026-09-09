@@ -34,6 +34,52 @@ function isActive(upload) {
   return ACTIVE_STATUSES.includes(upload.status)
 }
 
+// A <video> that reports failure instead of rendering an empty black box.
+//
+// This exists because of a real incident: fall clips were being encoded as
+// MPEG-4 Part 2 ("mp4v"), which no current browser can decode, while the
+// H.264 source video played fine. The backend was healthy - the rows were
+// right, the clips were on disk, and the range endpoint returned 206 - so
+// the only symptom anyone could see was a silent blank player, which reads
+// as "the results didn't load" rather than "this file can't be played".
+//
+// The encoder side is fixed (see recording_engine.open_writer's codec
+// ladder), but a player that fails silently will make the NEXT codec or
+// storage problem just as hard to recognise, so it now says so.
+function ClipVideo({ src, videoRef, className = 'w-full rounded-lg bg-black' }) {
+  const [failed, setFailed] = useState(false)
+
+  // A new source deserves a fresh attempt - otherwise one bad clip would
+  // leave the player permanently marked as broken.
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+
+  if (failed) {
+    return (
+      <div className="rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-red-300">
+        <p className="font-medium">This video could not be played.</p>
+        <p className="mt-1 text-red-300/80">
+          The file may be missing, or encoded in a format this browser cannot decode.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <video
+      ref={videoRef}
+      controls
+      preload="metadata"
+      className={className}
+      src={src}
+      onError={() => setFailed(true)}
+    >
+      Your browser does not support the video tag.
+    </video>
+  )
+}
+
 function UploadDetailModal({ upload, onClose }) {
   const token = useAuthStore((s) => s.token)
   const sourceVideoRef = useRef(null)
@@ -141,9 +187,7 @@ function UploadDetailModal({ upload, onClose }) {
 
       <div className="mb-4">
         <p className="sc-label mb-2">Source video</p>
-        <video ref={sourceVideoRef} controls className="w-full rounded-lg bg-black" src={sourceVideoUrl}>
-          Your browser does not support the video tag.
-        </video>
+        <ClipVideo videoRef={sourceVideoRef} src={sourceVideoUrl} />
       </div>
 
       <p className="sc-label mb-2">Fall event clips</p>
@@ -210,9 +254,7 @@ function UploadDetailModal({ upload, onClose }) {
                   Analysed {formatDateTime(event.timestamp)}
                 </p>
                 {recording ? (
-                  <video
-                    controls
-                    className="w-full rounded-lg bg-black"
+                  <ClipVideo
                     src={`${API_URL}/api/recordings/${recording.id}/video?token=${token}`}
                   />
                 ) : (
@@ -222,10 +264,8 @@ function UploadDetailModal({ upload, onClose }) {
             )
           })}
           {unpairedRecordings.map((rec) => (
-            <video
+            <ClipVideo
               key={rec.id}
-              controls
-              className="w-full rounded-lg bg-black"
               src={`${API_URL}/api/recordings/${rec.id}/video?token=${token}`}
             />
           ))}
