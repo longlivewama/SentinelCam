@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, require_operator
+from app.core.deps import get_current_user, get_current_user_allowing_query_token, require_operator
 from app.core.ranges import media_type_for, serve_file_range
 from app.core.scoping import can_access_upload_id, scope_recordings
 from app.database import get_db
@@ -90,7 +90,8 @@ def stream_video(
     recording_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),  # accepts header OR ?token= query param
+    # Reached by <video src>, which cannot send an Authorization header.
+    current_user: User = Depends(get_current_user_allowing_query_token),
 ):
     recording = _get_recording_or_404(recording_id, db, current_user)
     file_path = _existing_file_or_404(recording)
@@ -101,7 +102,8 @@ def stream_video(
 def download_recording(
     recording_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),  # accepts header OR ?token= query param
+    # Reached by <video src>, which cannot send an Authorization header.
+    current_user: User = Depends(get_current_user_allowing_query_token),
 ):
     recording = _get_recording_or_404(recording_id, db, current_user)
     file_path = _existing_file_or_404(recording)

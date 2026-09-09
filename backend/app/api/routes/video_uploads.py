@@ -17,14 +17,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, get_current_user_allowing_query_token
 from app.core.ranges import serve_file_range
 from app.core.video_signature import looks_like_supported_video
 from app.database import get_db
 from app.models.user import User
 from app.models.video_upload import STATUS_PENDING, STATUS_PROCESSING, VideoUpload
 from app.schemas.video_upload import VideoUploadOut
-from app.services.cascade_delete import stage_delete_video_upload
+from app.services.cascade_delete import remove_upload_clip_dir, stage_delete_video_upload
 from app.services.video_analysis import analyze_video_upload
 
 logger = logging.getLogger(__name__)
@@ -219,7 +219,8 @@ def stream_video_upload(
     upload_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),  # accepts header OR ?token= query param
+    # Reached by <video src>, which cannot send an Authorization header.
+    current_user: User = Depends(get_current_user_allowing_query_token),
 ):
     upload = _get_upload_or_404(upload_id, db)
     _ensure_can_view(upload, current_user)
@@ -260,5 +261,6 @@ def delete_video_upload(
                 os.remove(path)
             except OSError:
                 pass
+    remove_upload_clip_dir(upload.id)
 
     return None
