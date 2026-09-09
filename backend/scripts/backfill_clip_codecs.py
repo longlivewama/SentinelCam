@@ -28,6 +28,7 @@ the one you get by accident.
 
 Usage:
     python scripts/backfill_clip_codecs.py                       # report only
+    python scripts/backfill_clip_codecs.py --include-playable-orphans   # report only, incl. playable strays
     python scripts/backfill_clip_codecs.py --apply
     python scripts/backfill_clip_codecs.py --apply --delete-originals
 
@@ -267,8 +268,9 @@ def main(argv=None):
         "--include-playable-orphans",
         action="store_true",
         help=(
-            "Widen --delete-orphans to unreferenced clips that still play. They are equally "
-            "unreachable, but unlike mp4v dead weight they may be worth recovering first"
+            "Widen the orphan scan to unreferenced clips that still play. They are equally "
+            "unreachable, but unlike mp4v dead weight they may be worth recovering first. "
+            "On its own this only reports them; add --delete-orphans to remove them"
         ),
     )
     parser.add_argument(
@@ -282,8 +284,11 @@ def main(argv=None):
         parser.error("--delete-originals only makes sense with --apply")
     if args.delete_orphans and not args.apply:
         parser.error("--delete-orphans only makes sense with --apply")
-    if args.include_playable_orphans and not args.delete_orphans:
-        parser.error("--include-playable-orphans only makes sense with --delete-orphans")
+    # --include-playable-orphans deliberately does NOT require
+    # --delete-orphans. It only widens which unreferenced files the scan
+    # reports, and requiring the deleting flag to see them meant the sole
+    # way to find out what would be removed was to run the command that
+    # removes it - the opposite of this script's report-by-default rule.
     if args.orphan_min_age_minutes < 0:
         parser.error("--orphan-min-age-minutes cannot be negative")
 
@@ -371,7 +376,10 @@ def main(argv=None):
             )
             for path in orphans:
                 logger.info("    %s", path)
-            logger.info("Pass --delete-orphans to remove them.")
+            logger.info(
+                "Pass --apply --delete-orphans%s to remove them.",
+                " --include-playable-orphans" if args.include_playable_orphans else "",
+            )
 
     return 1 if failed else 0
 

@@ -380,6 +380,37 @@ def test_include_playable_orphans_removes_them_too(backfill, db):
     assert not playable.exists()
 
 
+def test_include_playable_orphans_reports_without_deleting(backfill, db, caplog):
+    """Widening the scan must be answerable without acting on the answer.
+
+    --include-playable-orphans used to require --delete-orphans, which in
+    turn requires --apply, so the only way to find out which playable
+    clips were unreferenced was to run the command that deleted them. An
+    operator auditing disk usage had no safe question to ask, and this
+    script's whole contract is that the safe direction is the one you get
+    by accident."""
+    playable = _playable_orphan(backfill)
+
+    with caplog.at_level("INFO"):
+        assert backfill.main(["--include-playable-orphans"]) == 0
+
+    assert playable.exists(), "a report-only run must not delete anything"
+    assert playable.name in caplog.text, "but it must say the file is there"
+    assert "--delete-orphans" in caplog.text, "and how to act on it"
+
+
+def test_playable_orphans_stay_out_of_the_default_report(backfill, db, caplog):
+    """Widening is opt-in in reporting too: a bare run still speaks only
+    about clips that cannot be played."""
+    playable = _playable_orphan(backfill)
+
+    with caplog.at_level("INFO"):
+        backfill.main([])
+
+    assert playable.exists()
+    assert playable.name not in caplog.text
+
+
 def test_widening_the_scope_still_spares_a_referenced_clip(backfill, db, unplayable_recording):
     """The broadest deletion this script can do must still never touch a
     file a row points at."""
@@ -408,9 +439,16 @@ def test_files_that_are_not_recognisable_video_are_never_deleted(backfill, db):
     assert keep.exists() and notes.exists()
 
 
-def test_the_wider_scope_requires_the_narrower_flag(backfill):
-    with pytest.raises(SystemExit):
-        backfill.main(["--apply", "--include-playable-orphans"])
+def test_the_wider_scope_never_deletes_on_its_own(backfill, db):
+    """Widening the scan is a reporting decision, deleting is a separate
+    one. --include-playable-orphans may be combined with --apply (which
+    re-encodes rows) without that becoming licence to remove unreferenced
+    files: only --delete-orphans does that."""
+    playable = _playable_orphan(backfill)
+
+    assert backfill.main(["--apply", "--include-playable-orphans"]) == 0
+
+    assert playable.exists()
 
 
 def test_the_in_flight_window_can_be_narrowed_deliberately(backfill, db):
