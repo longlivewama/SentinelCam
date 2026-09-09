@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import apiClient, { API_URL } from '../api/client'
+import apiClient from '../api/client'
 import { useAuthStore } from '../store/authStore'
 import CameraForm from '../components/CameraForm'
+import CameraStream from '../components/CameraStream'
+import MediaDownloadLink from '../components/MediaDownloadLink'
 import Modal from '../components/Modal'
 import VideoModal from '../components/VideoModal'
 import { formatDateTime, formatDuration, formatBytes, eventTypeMeta } from '../lib/format'
@@ -23,7 +25,6 @@ export default function CameraDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const isOperator = useAuthStore((s) => s.isOperator())
-  const token = useAuthStore((s) => s.token)
 
   const [camera, setCamera] = useState(null)
   const [recordings, setRecordings] = useState([])
@@ -39,10 +40,12 @@ export default function CameraDetail() {
     try {
       const [cameraRes, recordingsRes] = await Promise.all([
         apiClient.get(`/api/cameras/${id}`),
-        apiClient.get('/api/recordings', { params: { camera_id: id } }),
+        // A bounded 'recent recordings' panel; the full history is on the
+        // Recordings page, which pages properly.
+        apiClient.get('/api/recordings', { params: { camera_id: id, page_size: 10 } }),
       ])
       setCamera(cameraRes.data)
-      setRecordings(recordingsRes.data)
+      setRecordings(recordingsRes.data.items)
     } catch {
       setError('Failed to load camera details.')
     } finally {
@@ -89,8 +92,6 @@ export default function CameraDetail() {
 
   if (!camera) return null
 
-  const streamUrl = `${API_URL}/api/cameras/${camera.id}/stream?token=${token}`
-
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <button onClick={() => navigate('/cameras')} className="mb-4 text-sm text-slate-400 hover:text-accent-cyan">
@@ -99,7 +100,11 @@ export default function CameraDetail() {
 
       <div className="sc-card mb-6 overflow-hidden">
         <div className="relative aspect-video w-full bg-black">
-          <img src={streamUrl} alt={`${camera.name} live stream`} className="h-full w-full object-contain" />
+          <CameraStream
+            cameraId={camera.id}
+            alt={`${camera.name} live stream`}
+            className="h-full w-full object-contain"
+          />
           <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-md bg-surface-950/70 px-2.5 py-1 backdrop-blur">
             <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">Live</span>
@@ -176,7 +181,6 @@ export default function CameraDetail() {
           <div className="flex flex-col divide-y divide-surface-800">
             {recordings.map((rec) => {
               const meta = eventTypeMeta(rec.trigger_action)
-              const downloadUrl = `${API_URL}/api/recordings/${rec.id}/download?token=${token}`
               return (
                 <div key={rec.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div className="flex items-center gap-3">
@@ -195,9 +199,7 @@ export default function CameraDetail() {
                     <button onClick={() => setViewingRecording(rec)} className="sc-btn-secondary px-3 py-1.5 text-xs">
                       View
                     </button>
-                    <a href={downloadUrl} className="sc-btn-secondary px-3 py-1.5 text-xs">
-                      Download
-                    </a>
+                    <MediaDownloadLink kind="recording" id={rec.id} />
                   </div>
                 </div>
               )

@@ -1,6 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { API_URL } from '../api/client'
-import { useAuthStore } from '../store/authStore'
+import CameraStream from './CameraStream'
 
 const STATUS_STYLES = {
   active: 'bg-status-ok/10 text-status-ok border-status-ok/30',
@@ -16,9 +15,6 @@ function statusStyle(status) {
 
 export default function CameraTile({ camera }) {
   const navigate = useNavigate()
-  const token = useAuthStore((s) => s.token)
-
-  const streamUrl = `${API_URL}/api/cameras/${camera.id}/stream?token=${token}`
 
   return (
     <button
@@ -27,8 +23,8 @@ export default function CameraTile({ camera }) {
     >
       <div className="relative aspect-video w-full overflow-hidden bg-surface-800">
         {camera.is_active !== false ? (
-          <img
-            src={streamUrl}
+          <CameraStream
+            cameraId={camera.id}
             alt={`${camera.name} live stream`}
             className="h-full w-full object-cover"
             onError={(e) => {
