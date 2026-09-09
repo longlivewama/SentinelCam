@@ -21,6 +21,24 @@ corpus of short clips and reports:
 
 ## Quick start
 
+**Fastest path — a published corpus, fetched for you:**
+
+```bash
+cd backend && source venv/bin/activate && cd ..
+python -m ml.validation.fetch_urfd     # 10 falls + 10 ADL from the UR Fall Detection Dataset
+python -m ml.validation.evaluate
+```
+
+`fetch_urfd` downloads the clips, keeps the RGB half of each published depth|RGB composite, and
+derives each fall's timing from the dataset's own accelerometer peak rather than from anybody's
+eyeballing. The footage is CC BY-NC-SA 4.0 (non-commercial, academic; cite Kwolek & Kepski 2014)
+and is **not** redistributed here — see the script's docstring.
+
+That corpus is one dataset, one viewpoint, two rooms and one subject, so it is a starting point
+rather than a substitute for footage from your own deployment.
+
+**Or bring your own clips:**
+
 ```bash
 # 1. Create the corpus directory (it is gitignored — see Privacy below)
 mkdir -p ml/data/validation/videos
