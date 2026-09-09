@@ -13,8 +13,16 @@ import anywhere in the test session.
 Requires a local Postgres reachable at the DSN below with a
 `sentinelcam_test` database already created (see backend/README.md's
 "Running tests" section for the one-time setup command).
+
+Note that `setdefault` yields to a DATABASE_URL that is already set - which
+is what lets CI point the suite at its own service container. That same
+deference is a loaded gun anywhere the variable is already set for the real
+application (inside the backend container, it addresses live data), so
+`_assert_disposable_database` below refuses to run against anything that
+isn't named like a test database.
 """
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 os.environ.setdefault(
     "DATABASE_URL", "postgresql://sentinelcam:sentinelcam@localhost:5433/sentinelcam_test"
@@ -37,6 +45,63 @@ from app.models.password_reset_token import PasswordResetToken
 from app.models.recording import Recording
 from app.models.user import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER, User
 from app.models.video_upload import VideoUpload
+
+# Deliberate opt-out for the rare case where a disposable database cannot be
+# named conventionally. A guard with no escape hatch tends to get commented
+# out instead, which is strictly worse than one that has to be asked for.
+ALLOW_NON_TEST_DATABASE_ENV = "SENTINELCAM_ALLOW_NON_TEST_DATABASE"
+
+
+def _redacted(url: str) -> str:
+    """`url` with any password blanked, so a failure message can quote the
+    DSN without printing a credential into CI logs."""
+    parts = urlsplit(url)
+    if not parts.password:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.replace(f":{parts.password}@", ":***@", 1)))
+
+
+def _assert_disposable_database(url: str) -> None:
+    """Refuses to run unless `url` names a throwaway database.
+
+    This suite is destructive by design: `_schema` DROPs every table at
+    session start and `_clean_tables` DELETEs every row before each test.
+    Both are correct against a scratch database and catastrophic against
+    any other one, and nothing about running `pytest` signals which of the
+    two you have - the difference lives in an environment variable that
+    other tooling sets for its own reasons.
+
+    The convention (local default and CI both) is a `_test` suffix, so
+    anything else is treated as "not obviously disposable" and stops the
+    run before SQLAlchemy has connected, let alone dropped anything."""
+    database = urlsplit(url).path.lstrip("/")
+
+    if database.endswith("_test") or database.startswith("test_"):
+        return
+    if os.environ.get(ALLOW_NON_TEST_DATABASE_ENV) == "1":
+        return
+
+    raise pytest.UsageError(
+        f"Refusing to run the destructive test suite against database {database!r}.\n"
+        f"\n"
+        f"  DATABASE_URL = {_redacted(url)}\n"
+        f"\n"
+        f"These tests DROP every table at session start and DELETE every row before\n"
+        f"each test, so they only run against a database whose name ends in '_test'\n"
+        f"(or starts with 'test_').\n"
+        f"\n"
+        f"If you did not choose that database, something else exported DATABASE_URL -\n"
+        f"running pytest inside the backend container is the usual way this happens,\n"
+        f"and there it points at live application data.\n"
+        f"\n"
+        f"Fix it by unsetting DATABASE_URL to use the local default, or by pointing it\n"
+        f"at a scratch database (`createdb sentinelcam_test`). To destroy {database!r}\n"
+        f"anyway, set {ALLOW_NON_TEST_DATABASE_ENV}=1."
+    )
+
+
+_assert_disposable_database(os.environ["DATABASE_URL"])
+
 
 # Tables are dropped/deleted in FK-dependency order.
 _TABLES_IN_DELETE_ORDER = [

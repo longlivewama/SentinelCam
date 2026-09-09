@@ -90,6 +90,15 @@ ruff check .                 # lint
 See `tests/conftest.py` for fixtures (role-scoped users/auth headers, table cleanup between
 tests, rate-limiter reset between tests).
 
+The suite is destructive — it drops every table at session start and empties them between
+tests — so `conftest.py` refuses to run unless the target database is named like a scratch
+one (`*_test`, or `test_*`). `DATABASE_URL` takes precedence over the default above when it
+is already set, which is how CI points the suite at its own Postgres; it is also how running
+`pytest` inside the backend container would otherwise aim those drops at live application
+data. Unset `DATABASE_URL` (or point it at `sentinelcam_test`) rather than working around the
+refusal; `SENTINELCAM_ALLOW_NON_TEST_DATABASE=1` overrides it if you genuinely mean to wipe
+the database you named.
+
 ## Roles (RBAC)
 
 `User.role` is one of `admin` / `operator` / `viewer`, enforced via the `require_admin` /
