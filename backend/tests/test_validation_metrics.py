@@ -478,6 +478,344 @@ def test_the_shipped_example_template_is_valid(tmp_path):
     corpus = load_corpus(_write(tmp_path, payload))
 
     assert len(corpus.fall_videos) == 2
-    assert len(corpus.hard_negative_videos) == 3
+    assert len(corpus.hard_negative_videos) == 4
     # Includes a clip with two incidents, so the multi-fall path is exercised.
     assert corpus.total_incidents == 3
+    # And it demonstrates every optional field, since a template nobody can
+    # copy the taxonomy from is a template that produces untyped corpora.
+    assert corpus.fall_taxonomy()["direction"] == {"backward": 1, "forward": 1, "sideways": 1}
+    assert corpus.fall_taxonomy()["speed"] == {"fast": 2, "slow": 1}
+    assert all(v.conditions for v in corpus.videos), "every example clip shows a conditions block"
+
+
+# --- F1 -------------------------------------------------------------------
+
+def test_f1_is_the_harmonic_mean_of_precision_and_recall():
+    from ml.validation.metrics import f1_score
+
+    assert f1_score(1.0, 1.0) == pytest.approx(1.0)
+    assert f1_score(0.5, 0.5) == pytest.approx(0.5)
+    assert f1_score(1.0, 0.5) == pytest.approx(2 / 3)
+
+
+def test_f1_is_unmeasurable_rather_than_zero_when_an_input_is():
+    """Same rule as precision and recall: a corpus with no falls has no F1,
+    and printing 0.0 would read as total failure rather than not measured."""
+    from ml.validation.metrics import f1_score
+
+    assert f1_score(None, 0.9) is None
+    assert f1_score(0.9, None) is None
+    # But an honest zero stays zero.
+    assert f1_score(0.0, 0.0) == 0.0
+
+
+def test_summary_f1_reflects_the_corpus():
+    video = fall_video(incidents=[Incident(id="a", start_seconds=5.0, end_seconds=6.0)])
+    negative = hard_negative()
+    summary = evaluate(
+        Corpus(videos=[video, negative]),
+        {
+            video.filename: [Detection(video_time_seconds=5.5, confidence=0.9)],
+            negative.filename: [Detection(video_time_seconds=10.0, confidence=0.7)],
+        },
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    # 1 TP, 0 FN, 1 FP -> recall 1.0, precision 0.5
+    assert summary.incident_recall == pytest.approx(1.0)
+    assert summary.incident_precision == pytest.approx(0.5)
+    assert summary.incident_f1 == pytest.approx(2 / 3)
+
+
+def test_f1_is_unmeasurable_on_a_pure_hard_negative_corpus():
+    negative = hard_negative()
+    summary = evaluate(
+        Corpus(videos=[negative]), {negative.filename: []},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    assert summary.incident_recall is None
+    assert summary.incident_f1 is None
+
+
+# --- confidence distributions --------------------------------------------
+
+def _distribution_corpus():
+    video = fall_video(incidents=[Incident(id="a", start_seconds=5.0, end_seconds=6.0)])
+    negative = hard_negative()
+    return evaluate(
+        Corpus(videos=[video, negative]),
+        {
+            video.filename: [Detection(video_time_seconds=5.5, confidence=0.88)],
+            negative.filename: [
+                Detection(video_time_seconds=10.0, confidence=0.52),
+                Detection(video_time_seconds=20.0, confidence=0.61),
+            ],
+        },
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+
+def test_confidence_distribution_separates_true_detections_from_false_alerts():
+    """The diagnostic the sweep cannot give: if the two overlap heavily, no
+    threshold separates them and the fix is not the threshold."""
+    distribution = _distribution_corpus().confidence_distribution()
+
+    assert distribution["true_positives"]["n"] == 1
+    assert distribution["true_positives"]["max"] == pytest.approx(0.88)
+    assert distribution["false_alerts"]["n"] == 2
+    assert distribution["false_alerts"]["max"] == pytest.approx(0.61)
+
+
+def test_confidence_histogram_buckets_by_the_documented_edges():
+    histogram = _distribution_corpus().confidence_distribution()["false_alerts"]["histogram"]
+
+    assert histogram["0.50-0.60"] == 1
+    assert histogram["0.60-0.70"] == 1
+    assert sum(histogram.values()) == 2
+
+
+def test_a_confidence_of_exactly_one_lands_in_the_top_bucket():
+    """Half-open buckets everywhere except the top, or a perfect score
+    would fall off the end and vanish from the histogram."""
+    video = fall_video(incidents=[Incident(id="a", start_seconds=5.0, end_seconds=6.0)])
+    summary = evaluate(
+        Corpus(videos=[video]),
+        {video.filename: [Detection(video_time_seconds=5.5, confidence=1.0)]},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    histogram = summary.confidence_distribution()["true_positives"]["histogram"]
+    assert histogram["0.90-1.00"] == 1
+    assert sum(histogram.values()) == 1
+
+
+def test_an_empty_distribution_reports_none_rather_than_zero():
+    negative = hard_negative()
+    summary = evaluate(
+        Corpus(videos=[negative]), {negative.filename: []},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    stats = summary.confidence_distribution()["true_positives"]
+    assert stats["n"] == 0
+    assert stats["mean"] is None
+
+
+# --- per-condition and per-taxonomy breakdowns ----------------------------
+
+def _conditioned(filename, lighting, incidents=(), category="fall", activity="other"):
+    return AnnotatedVideo(
+        filename=filename,
+        duration_seconds=60.0,
+        category=category,
+        incidents=list(incidents),
+        activity=activity,
+        conditions={"lighting": lighting},
+    )
+
+
+def test_results_split_by_a_recording_condition():
+    """A detector that works in daylight and fails at night has the same
+    headline recall as one that works everywhere; only this tells them
+    apart."""
+    day = _conditioned("day.mp4", "daylight", [Incident(id="d", start_seconds=5.0, end_seconds=6.0)])
+    night = _conditioned("night.mp4", "night_ir", [Incident(id="n", start_seconds=5.0, end_seconds=6.0)])
+    summary = evaluate(
+        Corpus(videos=[day, night]),
+        {
+            day.filename: [Detection(video_time_seconds=5.5, confidence=0.9)],
+            night.filename: [],  # missed
+        },
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    by_lighting = {g.label: g for g in summary.by_condition("lighting")}
+    assert by_lighting["daylight"].recall == pytest.approx(1.0)
+    assert by_lighting["night_ir"].recall == pytest.approx(0.0)
+    assert summary.incident_recall == pytest.approx(0.5), "and the average hides both"
+
+
+def test_unlabelled_conditions_are_grouped_visibly_not_dropped():
+    labelled = _conditioned("day.mp4", "daylight", [Incident(id="d", start_seconds=5.0, end_seconds=6.0)])
+    unlabelled = fall_video("plain.mp4", incidents=[Incident(id="p", start_seconds=5.0, end_seconds=6.0)])
+    summary = evaluate(
+        Corpus(videos=[labelled, unlabelled]),
+        {labelled.filename: [], unlabelled.filename: []},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    labels = {g.label for g in summary.by_condition("lighting")}
+    assert labels == {"daylight", "unlabelled"}
+
+
+def test_recall_splits_by_fall_direction():
+    video = fall_video(incidents=[
+        Incident(id="fwd", start_seconds=5.0, end_seconds=6.0, direction="forward"),
+        Incident(id="back", start_seconds=20.0, end_seconds=21.0, direction="backward"),
+    ])
+    summary = evaluate(
+        Corpus(videos=[video]),
+        {video.filename: [Detection(video_time_seconds=5.5, confidence=0.9)]},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    by_direction = {g.label: g for g in summary.by_fall_direction()}
+    assert by_direction["forward"].recall == pytest.approx(1.0)
+    assert by_direction["backward"].recall == pytest.approx(0.0)
+
+
+def test_fall_type_groups_do_not_claim_a_precision():
+    """A false alert cannot be attributed to a fall direction, because no
+    fall happened - so precision within these groups is undefined, not 100%."""
+    video = fall_video(incidents=[
+        Incident(id="fwd", start_seconds=5.0, end_seconds=6.0, direction="forward"),
+    ])
+    summary = evaluate(
+        Corpus(videos=[video]),
+        {video.filename: [Detection(video_time_seconds=5.5, confidence=0.9)]},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    group = summary.by_fall_direction()[0]
+    assert group.false_positives == 0
+    assert group.recall == pytest.approx(1.0)
+
+
+def test_false_alert_rate_per_activity_is_reported_per_hour():
+    negative = hard_negative("exercise.mp4", duration=1800.0, activity="exercising")
+    summary = evaluate(
+        Corpus(videos=[negative]),
+        {negative.filename: [Detection(video_time_seconds=100.0, confidence=0.7)]},
+        min_confidence=0.4, min_sustained_seconds=0.6,
+    )
+
+    group = {g.label: g for g in summary.by_hard_negative_activity()}["exercising"]
+    # One false alert in half an hour is two per hour.
+    assert group.false_alerts_per_hour == pytest.approx(2.0)
+
+
+# --- the corpus taxonomy and its coverage check ---------------------------
+
+def _write_corpus(tmp_path, videos):
+    import json
+    path = tmp_path / "annotations.json"
+    path.write_text(json.dumps({"videos": videos}))
+    return path
+
+
+def test_fall_direction_and_speed_are_parsed_and_normalised(tmp_path):
+    path = _write_corpus(tmp_path, [{
+        "filename": "f.mp4", "duration_seconds": 30.0, "category": "fall",
+        "incidents": [{"start_seconds": 5.0, "end_seconds": 6.0,
+                       "direction": "Forward", "speed": " FAST "}],
+    }])
+
+    corpus = load_corpus(path)
+
+    assert corpus.videos[0].incidents[0].direction == "forward"
+    assert corpus.videos[0].incidents[0].speed == "fast"
+
+
+@pytest.mark.parametrize("field,value", [("direction", "backwards"), ("speed", "medium")])
+def test_an_unknown_fall_direction_or_speed_is_rejected(tmp_path, field, value):
+    """These are enumerations, not labels. A typo would silently become a
+    bucket of its own, and the coverage check - whose whole job is to say
+    "you have no backward falls yet" - would report that you do."""
+    path = _write_corpus(tmp_path, [{
+        "filename": "f.mp4", "duration_seconds": 30.0, "category": "fall",
+        "incidents": [{"start_seconds": 5.0, "end_seconds": 6.0, field: value}],
+    }])
+
+    with pytest.raises(AnnotationError, match=field):
+        load_corpus(path)
+
+
+def test_conditions_are_parsed_and_normalised(tmp_path):
+    good = _write_corpus(tmp_path, [{
+        "filename": "f.mp4", "duration_seconds": 30.0, "category": "fall",
+        "incidents": [{"start_seconds": 5.0, "end_seconds": 6.0}],
+        "conditions": {"lighting": "Night_IR", "distance": "far"},
+    }])
+    corpus = load_corpus(good)
+    assert corpus.videos[0].conditions == {"lighting": "night_ir", "distance": "far"}
+    # Absent dimensions read as "unlabelled", never None, so a report can
+    # group by them without special-casing.
+    assert corpus.videos[0].condition("occlusion") == "unlabelled"
+
+
+def test_a_misspelled_condition_key_is_rejected_rather_than_ignored(tmp_path):
+    """Ignoring it would make the clip look labelled when it is not - the
+    dimension would simply vanish from the per-condition breakdown."""
+    path = _write_corpus(tmp_path, [{
+        "filename": "f.mp4", "duration_seconds": 30.0, "category": "fall",
+        "incidents": [{"start_seconds": 5.0, "end_seconds": 6.0}],
+        "conditions": {"lightning": "daylight"},
+    }])
+
+    with pytest.raises(AnnotationError, match="lightning"):
+        load_corpus(path)
+
+
+def test_missing_coverage_names_what_the_corpus_still_lacks():
+    """The readiness check. An empty result is the only honest basis for
+    dropping the "preliminary" framing from a report."""
+    corpus = Corpus(videos=[
+        AnnotatedVideo(
+            filename="f.mp4", duration_seconds=30.0, category="fall",
+            incidents=[Incident(id="a", start_seconds=5.0, end_seconds=6.0,
+                                direction="forward", speed="fast")],
+            conditions={"lighting": "daylight"},
+        ),
+    ])
+
+    missing = corpus.missing_coverage()
+
+    assert missing["fall_direction"] == ["backward", "sideways"]
+    assert missing["fall_speed"] == ["slow"]
+    assert "sleeping" in missing["hard_negative_activity"]
+    # One labelled value is no better than none for a breakdown - there is
+    # nothing to compare it against.
+    assert "lighting" in missing["condition_variation"]
+
+
+def test_a_corpus_meeting_the_specification_reports_nothing_missing():
+    from ml.validation.annotations import (
+        CONDITION_DIMENSIONS,
+        FALL_DIRECTIONS,
+        FALL_SPEEDS,
+        REQUIRED_HARD_NEGATIVES,
+    )
+
+    falls = [
+        AnnotatedVideo(
+            filename=f"fall_{direction}_{speed}.mp4", duration_seconds=30.0, category="fall",
+            incidents=[Incident(id=f"{direction}-{speed}", start_seconds=5.0, end_seconds=6.0,
+                                direction=direction, speed=speed)],
+            conditions={d: "a" for d in CONDITION_DIMENSIONS},
+        )
+        for direction in FALL_DIRECTIONS for speed in FALL_SPEEDS
+    ]
+    negatives = [
+        AnnotatedVideo(
+            filename=f"hn_{activity}.mp4", duration_seconds=60.0, category="hard_negative",
+            incidents=[], activity=activity,
+            conditions={d: "b" for d in CONDITION_DIMENSIONS},
+        )
+        for activity in REQUIRED_HARD_NEGATIVES
+    ]
+
+    assert Corpus(videos=falls + negatives).missing_coverage() == {}
+
+
+def test_condition_coverage_counts_clips_per_value():
+    corpus = Corpus(videos=[
+        AnnotatedVideo(filename="a.mp4", duration_seconds=30.0, category="hard_negative",
+                       incidents=[], conditions={"lighting": "daylight"}),
+        AnnotatedVideo(filename="b.mp4", duration_seconds=30.0, category="hard_negative",
+                       incidents=[], conditions={"lighting": "daylight"}),
+        AnnotatedVideo(filename="c.mp4", duration_seconds=30.0, category="hard_negative",
+                       incidents=[], conditions={"lighting": "dim"}),
+    ])
+
+    assert corpus.condition_coverage()["lighting"] == {"daylight": 2, "dim": 1}

@@ -180,6 +180,7 @@ def main(argv: List[str] | None = None) -> int:
                     "min_sustained_seconds": min_sustained,
                     "incident_recall": point.incident_recall,
                     "incident_precision": point.incident_precision,
+                    "incident_f1": point.incident_f1,
                     "false_alerts_per_hour": point.false_alerts_per_hour,
                     "mean_latency_seconds": point.mean_latency_seconds,
                     "median_latency_seconds": point.median_latency_seconds,
@@ -213,6 +214,14 @@ def main(argv: List[str] | None = None) -> int:
             "total_incidents": evaluated_corpus.total_incidents,
             "missing_videos": missing,
             "duration_mismatches": mismatches,
+            "hard_negative_activities": evaluated_corpus.composition(),
+            "fall_taxonomy": evaluated_corpus.fall_taxonomy(),
+            "condition_coverage": evaluated_corpus.condition_coverage(),
+            # The readiness check. Empty means the corpus covers every
+            # bucket ml/validation/README.md asks for; anything present is
+            # the shopping list, and the reason `validation_status` below
+            # says what it says.
+            "missing_coverage": evaluated_corpus.missing_coverage(),
         },
         "configuration": {
             "min_confidence": production_confidence,
@@ -227,6 +236,7 @@ def main(argv: List[str] | None = None) -> int:
             "duplicate_detections": summary.duplicate_detections,
             "incident_recall": summary.incident_recall,
             "incident_precision": summary.incident_precision,
+            "incident_f1": summary.incident_f1,
             "hard_negative_hours": round(summary.hard_negative_hours, 4),
             "false_alerts_per_hour": summary.false_alerts_per_hour,
             "mean_latency_seconds": summary.mean_latency_seconds,
@@ -235,8 +245,27 @@ def main(argv: List[str] | None = None) -> int:
             "false_alert_categories": summary.false_alert_categories(),
             "false_alerts": summary.false_alert_details(),
             "missed_falls": summary.missed_fall_details(),
+            "confidence_distribution": summary.confidence_distribution(),
+            "by_condition": {
+                dimension: [g.as_dict() for g in groups]
+                for dimension, groups in summary.by_all_conditions().items()
+            },
+            "by_fall_direction": [g.as_dict() for g in summary.by_fall_direction()],
+            "by_fall_speed": [g.as_dict() for g in summary.by_fall_speed()],
+            "by_hard_negative_activity": [
+                g.as_dict() for g in summary.by_hard_negative_activity()
+            ],
         },
         "sweep": sweep_rows,
+        # Stated in the machine-readable output as well as the report, so a
+        # dashboard or CI job cannot present these numbers as validated
+        # performance without also carrying the caveat that they are not.
+        "validation_status": (
+            "Evaluation framework ready; independent real-world video validation pending "
+            "labelled footage."
+            if evaluated_corpus.missing_coverage()
+            else "Corpus meets the coverage specification in ml/validation/README.md."
+        ),
     }, indent=2) + "\n")
 
     # --- console summary ---------------------------------------------------
@@ -248,11 +277,19 @@ def main(argv: List[str] | None = None) -> int:
     recall = summary.incident_recall
     print(f"Incident recall       {'n/a' if recall is None else f'{recall * 100:.1f}%'} "
           f"({summary.true_positives}/{summary.total_incidents})")
+    f1 = summary.incident_f1
+    print(f"Incident F1            {'n/a' if f1 is None else f'{f1:.3f}'}")
     far = summary.false_alerts_per_hour
     print(f"False alerts/hour     {'n/a' if far is None else f'{far:.2f}'} "
           f"(over {summary.hard_negative_hours:.2f} h of hard negatives)")
     latency = summary.mean_latency_seconds
     print(f"Mean latency          {'n/a' if latency is None else f'{latency:.2f}s'}")
+    missing_coverage = evaluated_corpus.missing_coverage()
+    if missing_coverage:
+        print()
+        print("Status                Evaluation framework ready; independent real-world video")
+        print("                      validation pending labelled footage.")
+        print(f"                      Unrepresented: {', '.join(sorted(missing_coverage))}")
     print()
     print(f"Report  {args.report}")
     print(f"JSON    {args.json}")

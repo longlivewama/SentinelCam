@@ -1,5 +1,18 @@
 # Video-level validation
 
+> ## Status
+>
+> **Evaluation framework ready; independent real-world video validation pending labelled footage.**
+>
+> Everything in this directory works and runs against the real production inference path. What
+> does not exist yet is an independent, labelled, real-world corpus meeting the
+> [dataset specification](#the-dataset-this-needs) below. Until one does, **no claim about this
+> detector's operational accuracy is supported by evidence.** Any report generated here describes
+> the clips it was given and nothing more — and says so, on its own front page, generated from
+> the corpus rather than written by hand.
+>
+> Nothing here fabricates a number. A metric that cannot be computed prints `n/a`, never `0`.
+
 The fall detector's published metrics — precision 0.846, recall 0.800, mAP@50 0.877 — are
 **per-frame, on still images**. The product's claim is different: *a fall that happens raises an
 alert, quickly, and ordinary activity doesn't.* Those are separate quantities, and until this
@@ -12,10 +25,22 @@ corpus of short clips and reports:
 |---|---|
 | **Incident recall** | of the falls that happened, how many raised an alert |
 | **Incident precision** | of the alerts raised, how many were real falls |
+| **Incident F1** | harmonic mean of the two, for ranking threshold settings |
+| **True / false positives, false negatives** | the raw counts behind every rate above |
 | **False alerts / hour** | over ordinary-activity footage — the operator's nuisance rate |
 | **Detection latency** | seconds from the fall starting to the alert firing |
-| **Missed falls** | each one, with its clip and timestamp |
+| **Missed falls** | each one, with its clip, timestamp and fall type |
 | **False positives** | each one, grouped by what activity produced it |
+| **Confidence distributions** | scores of true vs false detections, with a histogram |
+| **Per-condition results** | recall/precision/F1 split by lighting, angle, distance, occlusion, resolution |
+| **Recall by fall type** | split by direction (forward/backward/sideways) and speed (slow/fast) |
+| **Threshold sweep** | the full grid, exact rather than approximated |
+| **Corpus coverage** | which required buckets the corpus does *not* yet contain |
+
+F1 is reported alongside precision and recall, never instead of them. For this product the two
+errors are not interchangeable: a missed fall is someone lying on a floor unnoticed, a false alert
+is an operator checking a camera for nothing. F1 weighting them equally is a convenience for
+ranking configurations, not a claim that they cost the same.
 
 ---
 
@@ -116,13 +141,107 @@ One JSON file. Times are seconds from the start of the clip. Full template:
 | `incidents[].start_seconds` | ✅ | When the fall *begins* — latency is measured from here |
 | `incidents[].end_seconds` | ✅ | When the person is down |
 | `incidents[].id` / `notes` | | Optional; `id` is auto-generated if omitted |
+| `incidents[].direction` | | `forward` \| `backward` \| `sideways`. Drives recall-by-fall-type |
+| `incidents[].speed` | | `slow` \| `fast`. Same |
 | `activity` | | Hard negatives only. Drives the false-positive breakdown |
 | `activity_intervals` | | Optional. Lets the report say *which moment* of a clip misfired |
+| `conditions` | | Optional object keyed by `lighting`, `camera_angle`, `distance`, `occlusion`, `resolution`. Drives the per-condition breakdown |
 
-Multiple falls in one clip are supported — add multiple `incidents`.
+Multiple falls in one clip are supported — add multiple `incidents`, and they may have different
+`direction`/`speed`: a clip where someone falls forward and then, getting up, falls backward is
+two different tests of the detector.
 
 **The `category` field is checked, not trusted.** A `fall` clip with no annotated incident, or a
 `hard_negative` with one, raises an error at load time rather than silently corrupting the metrics.
+
+`direction` and `speed` are validated against their closed sets, and unknown `conditions` keys are
+rejected. A typo of `"backwards"` or `"lightning"` would otherwise create a bucket of its own, and
+the coverage check below — whose whole job is to say *"you have no backward falls yet"* — would
+quietly report that you do. `conditions` **values** are free text, because deployments differ:
+`1080p`, `4k` and `cif` are all legitimate answers to `resolution`.
+
+
+---
+
+## The dataset this needs
+
+The framework is finished. The corpus is not. This section is the specification it is measured
+against — `Corpus.missing_coverage()` implements it, the report prints what is missing in
+section 1, and `python -m ml.validation.evaluate` prints it on the console. That check is
+mechanical on purpose: a corpus is not adequate because it is *large*, it is adequate when it
+exercises each failure mode the detector is claimed to handle.
+
+**Overall target: 20–50 clips minimum, ≈30 annotated fall incidents, and hours (not minutes) of
+hard-negative footage.** Thirty is where a single missed fall stops moving recall by several
+points. Below it, the report leads with a "preliminary" banner and differences between threshold
+settings are mostly noise.
+
+### Falls
+
+Every fall must be annotated with a `direction` and a `speed`, and the corpus must contain at
+least one of each value — ideally several.
+
+| Dimension | Required values | Why it is a separate bucket |
+|---|---|---|
+| `direction` | `forward` | The most common and the best represented in public data — likely the detector's easiest case |
+| | `backward` | Different silhouette entirely; often ends with the subject partly under furniture |
+| | `sideways` | The posture closest to "lying down", so the hardest to separate from a hard negative |
+| `speed` | `fast` | A trip or collapse. Brief transition, then a sustained on-ground posture |
+| | `slow` | A controlled slide down a wall or off a chair. **The case the sustained-duration gate is least suited to** — the transition is gradual, so the moment the fall "starts" is ambiguous to the model as well as the annotator |
+
+A single overall recall figure averages these together, which is exactly how a detector that never
+sees backward falls passes validation.
+
+### Hard negatives
+
+Each of these must be present, as its own `activity`. They are not decoration: every one produces
+the visual signature the detector fires on — **a person, horizontal or low, sustained** — and the
+frame-level training data contains none of them.
+
+| `activity` | What it probes |
+|---|---|
+| `exercising` | **Highest priority.** Sit-ups and floor work are sustained on-ground posture that defeats the duration gate outright |
+| `lying_sofa` | Horizontal, sustained, entirely ordinary |
+| `sleeping` | The same, for hours, and in a care setting the most common state of all |
+| `sitting` | The most frequent transition in any indoor footage |
+| `bending` | Torso horizontal, feet planted — a fall's silhouette without a fall |
+| `crouching` | Brief on-ground posture; probes whether the gate works at all |
+| `picking_up` | Reaching to the floor and back, repeatedly |
+| `dropped_object` | Motion at floor level with no person on the ground — tests whether the model keys on the person or the movement |
+| `pet` | A cat or dog is a small horizontal shape at floor level |
+| `occluded` | A person partly hidden by furniture, which truncates the bounding box the way a fall does |
+
+Also useful, not required: `standing_up`, `kneeling`, `chair_transfer`, `stretching`,
+`floor_activity`, `lying_bed`, `walking`.
+
+### Environmental variation
+
+Each dimension needs **at least two distinct values**, or there is nothing to compare across and
+the per-condition table stays empty. Suggested values, but any string works:
+
+| Dimension | Suggested values | Why it matters |
+|---|---|---|
+| `lighting` | `daylight`, `dim`, `night_ir`, `mixed` | IR footage is greyscale and differently textured; the training data is daylight RGB |
+| `camera_angle` | `ceiling`, `high_corner`, `eye_level`, `low` | A ceiling camera sees a fall as a shape change, a corner camera sees a silhouette drop. Almost all public fall data is one angle |
+| `distance` | `near`, `mid`, `far` | A distant subject is a handful of pixels; small-object recall is where detectors fail first |
+| `occlusion` | `none`, `partial`, `heavy` | Furniture truncates the box, which is also what a fall does |
+| `resolution` | `1080p`, `720p`, `480p`, … | Deployments run whatever cameras they already own |
+
+### Independence
+
+The corpus must share **no footage and no source** with the training data — see
+[Separation from training data](#separation-from-training-data) below. Overlap turns every number
+into a measurement of memorisation.
+
+### What "ready" means
+
+`missing_coverage()` returning empty is a **necessary** condition, not a sufficient one. It says
+the corpus contains at least one example of each bucket. It does not say the sample is large
+enough for a confidence interval anyone should act on, and it cannot say whether the footage
+resembles a particular deployment. Both remain judgements about the data, and the report's
+Limitations section states them on every run.
+
+---
 
 ### Annotating well
 
