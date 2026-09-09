@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.deps import get_current_user, require_operator
+from app.core.deps import get_current_user, get_current_user_allowing_query_token, require_operator
 from app.database import get_db
 from app.models.camera import Camera
 from app.models.user import User
@@ -96,7 +96,8 @@ def delete_camera(
 def stream_camera(
     camera_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),  # accepts header OR ?token= query param
+    # Reached by <img src>, which cannot send an Authorization header.
+    current_user: User = Depends(get_current_user_allowing_query_token),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None or not camera.is_active:
