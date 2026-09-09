@@ -275,3 +275,80 @@ def test_the_temporary_name_cannot_resolve_back_to_the_clip_being_read(backfill)
     resolved = os.path.splitext(temp_base)[0] + ".mp4"
 
     assert resolved != source, f"the temp path collapses onto the source clip: {resolved}"
+
+
+# --- deleting unreferenced files ------------------------------------------
+
+def _age(path: Path, seconds: int):
+    """Backdates a file so the in-flight guard does not protect it."""
+    stamp = os.stat(path).st_mtime - seconds
+    os.utime(path, (stamp, stamp))
+
+
+def test_orphans_are_only_deleted_when_asked(backfill, db, tmp_path):
+    orphan = _write_mp4v(Path(backfill.settings.RECORDINGS_DIR) / "9" / "orphan.mp4")
+    _age(orphan, 7200)
+
+    backfill.main(["--apply"])
+
+    assert orphan.exists(), "the default must not delete anything"
+
+
+def test_delete_orphans_removes_unreferenced_unplayable_files(backfill, db, tmp_path):
+    orphan = _write_mp4v(Path(backfill.settings.RECORDINGS_DIR) / "9" / "orphan.mp4")
+    _age(orphan, 7200)
+
+    backfill.main(["--apply", "--delete-orphans"])
+
+    assert not orphan.exists()
+
+
+def test_a_referenced_file_is_never_treated_as_an_orphan(backfill, db, unplayable_recording):
+    """The whole safety of this rests on 'no row points at it', so a row
+    that does point at a file must protect it even while it is being
+    converted in the same run."""
+    backfill.main(["--apply", "--delete-orphans"])
+
+    db.refresh(unplayable_recording)
+    assert Path(unplayable_recording.file_path).exists()
+
+
+def test_a_recently_written_orphan_is_left_alone(backfill, db, tmp_path, caplog):
+    """Clips are written before their row is inserted, so a clip being
+    encoded right now is indistinguishable from an orphan. Deleting it
+    would destroy an analysis in flight."""
+    fresh = _write_mp4v(Path(backfill.settings.RECORDINGS_DIR) / "9" / "in_flight.mp4")
+
+    with caplog.at_level("INFO"):
+        backfill.main(["--apply", "--delete-orphans"])
+
+    assert fresh.exists(), "a just-written clip must survive"
+    assert "in flight" in caplog.text
+
+
+def test_playable_orphans_are_not_deleted(backfill, db, tmp_path):
+    """This flag reclaims dead weight from the codec bug. A playable
+    unreferenced clip is a different judgement call and is not this
+    script's to make."""
+    from app.services.recording_engine import open_writer
+
+    clip_dir = Path(backfill.settings.RECORDINGS_DIR) / "9"
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    codec, writer, written = open_writer(str(clip_dir / "playable_orphan.mp4"), 64, 48, 10)
+    assert writer is not None
+    for i in range(10):
+        writer.write(np.full((48, 64, 3), i * 20, dtype=np.uint8))
+    writer.release()
+    if inspect_clip(written).needs_transcode:
+        pytest.skip("this environment has no browser-playable encoder")
+    _age(Path(written), 7200)
+
+    backfill.main(["--apply", "--delete-orphans"])
+
+    assert Path(written).exists()
+
+
+def test_delete_orphans_requires_apply(backfill):
+    """Reporting mode must never delete."""
+    with pytest.raises(SystemExit):
+        backfill.main(["--delete-orphans"])

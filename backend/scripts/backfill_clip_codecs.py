@@ -41,6 +41,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -70,6 +71,13 @@ TEMP_MARKER = "__transcode__"
 BACKUP_SUFFIX = ".pre-transcode"
 
 DEFAULT_FPS = 10.0
+
+# An unreferenced file is not necessarily an abandoned one: clips are
+# written to disk before their row is inserted (see
+# video_analysis._write_upload_clip), so a clip being encoded right now
+# looks exactly like an orphan. Anything touched recently is left alone
+# rather than deleted out from under an analysis in flight.
+ORPHAN_MIN_AGE_SECONDS = 3600
 
 
 class TranscodeError(RuntimeError):
@@ -203,9 +211,40 @@ def _orphaned_unplayable_clips(known_paths: set) -> list:
     return orphans
 
 
+def _delete_orphans(orphans: list) -> tuple:
+    """Removes unreferenced unplayable clips, skipping any that were
+    written recently. Returns `(deleted_count, freed_bytes, skipped)`."""
+    now = time.time()
+    deleted = freed = 0
+    skipped = []
+
+    for path in orphans:
+        try:
+            stat = path.stat()
+            if now - stat.st_mtime < ORPHAN_MIN_AGE_SECONDS:
+                skipped.append(path)
+                continue
+            path.unlink()
+        except OSError as exc:
+            logger.error("    could not remove %s: %s", path, exc)
+            continue
+        deleted += 1
+        freed += stat.st_size
+
+    return deleted, freed, skipped
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Re-encode stored clips that no browser can play.")
     parser.add_argument("--apply", action="store_true", help="Actually re-encode; without this, only reports")
+    parser.add_argument(
+        "--delete-orphans",
+        action="store_true",
+        help=(
+            "Also remove unplayable clip files that no recording row points at. "
+            "They cannot be served, so this only reclaims disk - but it is irreversible"
+        ),
+    )
     parser.add_argument(
         "--delete-originals",
         action="store_true",
@@ -215,6 +254,8 @@ def main(argv=None):
 
     if args.delete_originals and not args.apply:
         parser.error("--delete-originals only makes sense with --apply")
+    if args.delete_orphans and not args.apply:
+        parser.error("--delete-orphans only makes sense with --apply")
 
     converted = failed = skipped = 0
     reclaimable = 0
@@ -280,14 +321,27 @@ def main(argv=None):
 
     if orphans:
         total = sum(path.stat().st_size for path in orphans)
-        logger.info(
-            "\nAlso found %d unplayable file(s) (%s) that no recording row points at, "
-            "so they cannot be served and were left alone:",
-            len(orphans),
-            _human(total),
-        )
-        for path in orphans:
-            logger.info("    %s", path)
+
+        if args.delete_orphans:
+            deleted, freed, skipped = _delete_orphans(orphans)
+            logger.info("\nRemoved %d unreferenced unplayable file(s), freeing %s.", deleted, _human(freed))
+            for path in skipped:
+                logger.info(
+                    "    kept %s - written less than %d minutes ago, so it may belong to an "
+                    "analysis still in flight",
+                    path,
+                    ORPHAN_MIN_AGE_SECONDS // 60,
+                )
+        else:
+            logger.info(
+                "\nAlso found %d unplayable file(s) (%s) that no recording row points at, "
+                "so they cannot be served and were left alone:",
+                len(orphans),
+                _human(total),
+            )
+            for path in orphans:
+                logger.info("    %s", path)
+            logger.info("Pass --delete-orphans to remove them.")
 
     return 1 if failed else 0
 
