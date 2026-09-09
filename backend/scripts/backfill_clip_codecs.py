@@ -78,6 +78,7 @@ DEFAULT_FPS = 10.0
 # looks exactly like an orphan. Anything touched recently is left alone
 # rather than deleted out from under an analysis in flight.
 ORPHAN_MIN_AGE_SECONDS = 3600
+ORPHAN_MIN_AGE_MINUTES = ORPHAN_MIN_AGE_SECONDS // 60
 
 
 class TranscodeError(RuntimeError):
@@ -193,11 +194,17 @@ def _install(written: Path, source: Path):
     return final, source
 
 
-def _orphaned_unplayable_clips(known_paths: set) -> list:
-    """Unplayable clip files under the recordings directory that no row
-    points at. Reported, never touched: without a row they cannot be
-    served, so re-encoding them would be disk churn - but an operator
-    should still know they are there."""
+def _orphaned_clips(known_paths: set, include_playable: bool = False) -> list:
+    """Clip files under the recordings directory that no row points at.
+
+    Never re-encoded: without a row they cannot be served, so converting
+    them would be disk churn - but an operator should know they are
+    there.
+
+    Only files this module recognises as video are eligible. A file whose
+    codec could not be determined is left out entirely rather than
+    guessed at: "unreferenced" is a claim about the database, and it must
+    not become licence to delete something that is not even a clip."""
     root = Path(settings.RECORDINGS_DIR)
     if not root.is_dir():
         return []
@@ -206,14 +213,15 @@ def _orphaned_unplayable_clips(known_paths: set) -> list:
     for path in sorted(root.rglob("*")):
         if not path.is_file() or str(path) in known_paths:
             continue
-        if inspect_clip(str(path)).needs_transcode:
+        playable = inspect_clip(str(path)).playable
+        if playable is False or (include_playable and playable is True):
             orphans.append(path)
     return orphans
 
 
-def _delete_orphans(orphans: list) -> tuple:
-    """Removes unreferenced unplayable clips, skipping any that were
-    written recently. Returns `(deleted_count, freed_bytes, skipped)`."""
+def _delete_orphans(orphans: list, min_age_seconds: int = ORPHAN_MIN_AGE_SECONDS) -> tuple:
+    """Removes unreferenced clips, skipping any written within
+    `min_age_seconds`. Returns `(deleted_count, freed_bytes, skipped)`."""
     now = time.time()
     deleted = freed = 0
     skipped = []
@@ -221,7 +229,7 @@ def _delete_orphans(orphans: list) -> tuple:
     for path in orphans:
         try:
             stat = path.stat()
-            if now - stat.st_mtime < ORPHAN_MIN_AGE_SECONDS:
+            if now - stat.st_mtime < min_age_seconds:
                 skipped.append(path)
                 continue
             path.unlink()
@@ -246,6 +254,24 @@ def main(argv=None):
         ),
     )
     parser.add_argument(
+        "--orphan-min-age-minutes",
+        type=int,
+        default=ORPHAN_MIN_AGE_MINUTES,
+        help=(
+            "How recently written an unreferenced file may be and still be spared "
+            f"(default {ORPHAN_MIN_AGE_MINUTES}). Lower it only once you have confirmed no "
+            "analysis is running: a clip reaches disk before its row exists"
+        ),
+    )
+    parser.add_argument(
+        "--include-playable-orphans",
+        action="store_true",
+        help=(
+            "Widen --delete-orphans to unreferenced clips that still play. They are equally "
+            "unreachable, but unlike mp4v dead weight they may be worth recovering first"
+        ),
+    )
+    parser.add_argument(
         "--delete-originals",
         action="store_true",
         help="Remove each superseded file once its row points at the new one (implies --apply)",
@@ -256,6 +282,10 @@ def main(argv=None):
         parser.error("--delete-originals only makes sense with --apply")
     if args.delete_orphans and not args.apply:
         parser.error("--delete-orphans only makes sense with --apply")
+    if args.include_playable_orphans and not args.delete_orphans:
+        parser.error("--include-playable-orphans only makes sense with --delete-orphans")
+    if args.orphan_min_age_minutes < 0:
+        parser.error("--orphan-min-age-minutes cannot be negative")
 
     converted = failed = skipped = 0
     reclaimable = 0
@@ -305,7 +335,7 @@ def main(argv=None):
             logger.info("    now serving %s", final.name)
             converted += 1
 
-        orphans = _orphaned_unplayable_clips(known_paths)
+        orphans = _orphaned_clips(known_paths, include_playable=args.include_playable_orphans)
 
     if args.apply:
         logger.info("\nRe-encoded %d clip(s), %d failed, %d already playable or unreadable.", converted, failed, skipped)
@@ -323,18 +353,18 @@ def main(argv=None):
         total = sum(path.stat().st_size for path in orphans)
 
         if args.delete_orphans:
-            deleted, freed, skipped = _delete_orphans(orphans)
-            logger.info("\nRemoved %d unreferenced unplayable file(s), freeing %s.", deleted, _human(freed))
+            deleted, freed, skipped = _delete_orphans(orphans, args.orphan_min_age_minutes * 60)
+            logger.info("\nRemoved %d unreferenced file(s), freeing %s.", deleted, _human(freed))
             for path in skipped:
                 logger.info(
                     "    kept %s - written less than %d minutes ago, so it may belong to an "
                     "analysis still in flight",
                     path,
-                    ORPHAN_MIN_AGE_SECONDS // 60,
+                    args.orphan_min_age_minutes,
                 )
         else:
             logger.info(
-                "\nAlso found %d unplayable file(s) (%s) that no recording row points at, "
+                "\nAlso found %d file(s) (%s) that no recording row points at, "
                 "so they cannot be served and were left alone:",
                 len(orphans),
                 _human(total),

@@ -326,10 +326,10 @@ def test_a_recently_written_orphan_is_left_alone(backfill, db, tmp_path, caplog)
     assert "in flight" in caplog.text
 
 
-def test_playable_orphans_are_not_deleted(backfill, db, tmp_path):
-    """This flag reclaims dead weight from the codec bug. A playable
-    unreferenced clip is a different judgement call and is not this
-    script's to make."""
+def test_playable_orphans_survive_the_default_scope(backfill, db, tmp_path):
+    """--delete-orphans reclaims dead weight from the codec bug. A
+    playable unreferenced clip is a different judgement - it may be worth
+    recovering - so widening to it has to be asked for separately."""
     from app.services.recording_engine import open_writer
 
     clip_dir = Path(backfill.settings.RECORDINGS_DIR) / "9"
@@ -352,3 +352,80 @@ def test_delete_orphans_requires_apply(backfill):
     """Reporting mode must never delete."""
     with pytest.raises(SystemExit):
         backfill.main(["--delete-orphans"])
+
+
+def _playable_orphan(backfill, name="playable_orphan.mp4"):
+    """An unreferenced clip that decodes fine, or a skip if this build
+    cannot produce one."""
+    from app.services.recording_engine import open_writer
+
+    clip_dir = Path(backfill.settings.RECORDINGS_DIR) / "9"
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    codec, writer, written = open_writer(str(clip_dir / name), 64, 48, 10)
+    assert writer is not None
+    for i in range(10):
+        writer.write(np.full((48, 64, 3), i * 20, dtype=np.uint8))
+    writer.release()
+    if inspect_clip(written).needs_transcode:
+        pytest.skip("this environment has no browser-playable encoder")
+    _age(Path(written), 7200)
+    return Path(written)
+
+
+def test_include_playable_orphans_removes_them_too(backfill, db):
+    playable = _playable_orphan(backfill)
+
+    backfill.main(["--apply", "--delete-orphans", "--include-playable-orphans"])
+
+    assert not playable.exists()
+
+
+def test_widening_the_scope_still_spares_a_referenced_clip(backfill, db, unplayable_recording):
+    """The broadest deletion this script can do must still never touch a
+    file a row points at."""
+    _playable_orphan(backfill)
+
+    backfill.main(["--apply", "--delete-orphans", "--include-playable-orphans"])
+
+    db.refresh(unplayable_recording)
+    assert Path(unplayable_recording.file_path).exists()
+
+
+def test_files_that_are_not_recognisable_video_are_never_deleted(backfill, db):
+    """"Unreferenced" is a claim about the database, not licence to
+    delete whatever else lives in the storage tree."""
+    root = Path(backfill.settings.RECORDINGS_DIR)
+    root.mkdir(parents=True, exist_ok=True)
+    keep = root / ".gitkeep"
+    keep.write_text("")
+    notes = root / "operator-notes.txt"
+    notes.write_text("do not delete me")
+    for path in (keep, notes):
+        _age(path, 7200)
+
+    backfill.main(["--apply", "--delete-orphans", "--include-playable-orphans"])
+
+    assert keep.exists() and notes.exists()
+
+
+def test_the_wider_scope_requires_the_narrower_flag(backfill):
+    with pytest.raises(SystemExit):
+        backfill.main(["--apply", "--include-playable-orphans"])
+
+
+def test_the_in_flight_window_can_be_narrowed_deliberately(backfill, db):
+    """The default spares anything recent, which is right when the
+    operator cannot know what is running - but wrong when they can. It
+    has to be lowerable without editing the script."""
+    fresh = _write_mp4v(Path(backfill.settings.RECORDINGS_DIR) / "9" / "recent_orphan.mp4")
+
+    backfill.main(["--apply", "--delete-orphans"])
+    assert fresh.exists(), "the default must still spare it"
+
+    backfill.main(["--apply", "--delete-orphans", "--orphan-min-age-minutes", "0"])
+    assert not fresh.exists()
+
+
+def test_a_negative_age_window_is_rejected(backfill):
+    with pytest.raises(SystemExit):
+        backfill.main(["--apply", "--delete-orphans", "--orphan-min-age-minutes", "-1"])
