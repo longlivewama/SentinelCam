@@ -23,6 +23,13 @@ runs the tests, and tears the stack down afterward. Uses whatever
 `docker-compose.yml` in the repo root defines, so it's the same topology
 in CI and locally.
 
+Seeding **resets the stack's database** — it truncates every table before
+inserting its fixtures. Inside the container that database is the
+application's own, so the seeder refuses to run without an explicit
+`--wipe-database`, which `global-setup.js` passes for you. Run `npm test`
+rather than the seeder by hand unless you mean to discard whatever the
+stack currently holds.
+
 View the HTML report after a run:
 
 ```bash
