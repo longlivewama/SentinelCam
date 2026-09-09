@@ -39,7 +39,7 @@ from app.models.video_upload import (
     STATUS_PROCESSING,
     VideoUpload,
 )
-from app.services.cascade_delete import stage_delete_video_upload
+from app.services.cascade_delete import remove_upload_clip_dir, stage_delete_video_upload
 from app.services.detection.engine import detection_engine
 from app.services.detection.fall_pipeline import FallPipeline
 from app.services.detection.video_scan import open_video, scan_video
@@ -176,6 +176,7 @@ def _finalize_if_deletion_requested(video_upload_id: int) -> bool:
                 logger.warning(
                     "Could not remove %s while finalizing deleted upload %s", path, video_upload_id,
                 )
+    remove_upload_clip_dir(video_upload_id)
     return True
 
 
