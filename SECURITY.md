@@ -73,10 +73,30 @@ Documented so you know what exists — not as a claim that the implementation is
   are visible to every authenticated user. The rule lives in one place
   (`backend/app/core/scoping.py`) so every route enforces the same one, and a resource the caller
   may not see returns 404 rather than 403 — confirming an ID exists is itself a disclosure.
+- **Media tokens.** A browser cannot attach an `Authorization` header to `<video src>`,
+  `<img src>` or an `<a href>` download, so those four endpoints have to take a credential in the
+  URL — and a URL is written into every access log, proxy and browser history on the path. What
+  travels there is deliberately close to worthless: the client mints a **media token**
+  (`POST /api/{recordings|video-uploads|cameras}/{id}/media-token`) that is scoped to that single
+  resource by a `res` claim, expires in `MEDIA_TOKEN_EXPIRE_SECONDS` (default 300 s), carries no
+  role or email, and is refused everywhere else. The session JWT is **not** accepted in a query
+  string on any endpoint, and a media token is refused as a bearer credential on every JSON route
+  and on the realtime socket. Minting runs the same ownership check the media endpoint runs, so a
+  token can never be obtained for a resource the caller could not already fetch, and the owning
+  account is re-resolved on every request — deactivating a user kills their outstanding media
+  tokens immediately.
+- **Credential redaction in logs.** Uvicorn's access log writes the full request line, query
+  string included. `backend/app/core/logging_utils.py` installs a log-record factory plus filters
+  on Uvicorn's own loggers, so `token=…` and `Bearer …` are replaced with `[REDACTED]` in every
+  record in the process — regardless of which library emitted it — while leaving the path and the
+  rest of the query string intact for debugging.
 - **WebSocket authorization.** Delivery is scoped per subscriber using that same rule, so the
   realtime channel cannot hand a client data the REST API would refuse it. The connection also
   closes itself when the token it was opened with expires, since a long-lived socket cannot
-  re-authorize per message.
+  re-authorize per message, and it rejects media tokens outright — a credential handed out for a
+  `<video src>` must not become a live feed of the account. The handshake URL does still carry the
+  session token (the native WebSocket API has no header); that is covered by the redaction above
+  and recorded as a known limitation in the README.
 - **Rate limiting.** Per-IP sliding-window limits on signup, login, forgot-password and
   reset-password, configurable through environment variables. Two caveats: the limiter is
   in-memory and therefore per-process (a multi-worker deployment needs a shared store), and it
@@ -84,7 +104,8 @@ Documented so you know what exists — not as a claim that the implementation is
   unless the proxy is configured to preserve the client address.
 - **CORS.** Restricted to the origins listed in `CORS_ORIGINS`; never `*`.
 - **Security headers.** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `Referrer-Policy: no-referrer` (the stream and video endpoints carry a `?token=` JWT in the URL)
+  `Referrer-Policy: no-referrer` (the stream and video endpoints carry a scoped media token in
+  the URL)
   and a restrictive `Permissions-Policy` on every response.
 - **Upload validation.** Server-side extension, size and **container-signature** checks — a file
   is verified to actually be one of the accepted video containers, not merely named like one —

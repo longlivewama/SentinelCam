@@ -6,6 +6,46 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- **Media tokens replace the session JWT in media URLs.** `<video src>`, `<img src>` and download
+  links cannot send an `Authorization` header, so those four endpoints took the full 24-hour JWT
+  in a `?token=` query parameter — and from there into Uvicorn's access log. The client now mints
+  a short-lived token per resource (`POST /api/{recordings|video-uploads|cameras}/{id}/media-token`,
+  default 300 s) that is scoped to that one clip, upload or camera, carries no role, and is
+  refused as a bearer credential on every JSON route and on the realtime socket. A session JWT is
+  no longer accepted in a query string anywhere.
+- **The realtime WebSocket rejects media tokens.** It previously accepted any valid JWT, so a
+  token handed out for a video element opened a live feed of every alert the account could see.
+- **Credentials are redacted from every log record.** A log-record factory plus filters on
+  Uvicorn's loggers replace `token=…` and `Bearer …` with `[REDACTED]`, covering the access log,
+  the WebSocket handshake line and any third-party library that logs a full URL.
+
+### Added
+
+- **Real pagination** on the alert, recording, video-upload and admin-user listings. Offset paging
+  at the database (never fetching all rows and slicing in Python) with a
+  `{items, page, page_size, total, pages}` envelope, ownership filtering applied in SQL before the
+  count, and a primary-key tiebreaker on every sort so a row cannot appear on two pages when
+  timestamps collide. Replaces the `limit` parameter, which bounded the response but left older
+  rows unreachable. Previous/next controls, server-side filters and preserved filter state in the
+  UI.
+- **`trigger_action` filter on `GET /api/recordings`**, so the Recordings page's event-type filter
+  keeps working now that the client no longer receives every row.
+- **ML validation: F1, confidence distributions, per-condition analysis and corpus coverage.** The
+  evaluator now reports incident F1, the confidence distribution of true detections versus false
+  alerts (with a histogram straddling the production threshold), recall split by fall direction
+  and speed, and results split by lighting, camera angle, distance, occlusion and resolution.
+  `Corpus.missing_coverage()` checks a corpus mechanically against the dataset specification in
+  `ml/validation/README.md` and every report states what is missing on its own front page.
+
+### Changed
+
+- **Fall clips encode with VP8 instead of VP9** — 4.8x faster to encode, 18% smaller, and 0.27 dB
+  apart on PSNR (with a better worst-frame figure), equally playable in every browser targeted.
+  Clip encoding runs inline in the upload analyser and was ~70% of its wall clock: a real 29 s
+  video went from 77.6 s to 36.3 s end to end, **53% faster with identical detection output**.
+
 ### In progress
 
 - Training a single-class YOLOv8n `Fall` object detector on a prepared fall-detection dataset, to
