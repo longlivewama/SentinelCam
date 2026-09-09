@@ -73,3 +73,9 @@ htmlcov/
 # --- Misc ---
 *.log
 Thumbs.db
+
+# Ad-hoc QA harnesses driven by hand during release validation. They are
+# scratch scripts against a live stack, not part of the Playwright suite.
+e2e/qa_session.mjs
+e2e/ws_check.mjs
+e2e/ws_resilience.mjs
