@@ -77,11 +77,12 @@ and the timeline differ — which is what keeps the "analyse this video" feature
 production detector running, not a separate demo path.
 
 > **Scope note.** This is an engineering project, **not a certified medical or safety device**.
-> The trained detector scores mAP@50 0.877 on a held-out test split of stills; it has **not** been
-> evaluated on video, and not against realistic floor-level hard negatives. A framework to do both
-> exists at [`ml/validation/`](ml/validation/README.md) but has no labelled corpus to run on yet.
-> Those limits are spelled out in [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) and must be read before
-> any operational use.
+> The trained detector scores mAP@50 0.877 on a held-out test split of stills, but measured on
+> video it finds 90% of falls while raising roughly **574 false alerts per hour of ordinary
+> activity** — good enough to help a human review footage, not good enough to alert unattended.
+> That result, how to reproduce it, and why no threshold fixes it are under
+> [Known limitations](#known-limitations); the rest is in
+> [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md). Read both before any operational use.
 
 ---
 
@@ -645,20 +646,41 @@ Planned:
 
 Stated plainly, because they matter when reading the rest of this document:
 
-1. **The fall detector has never been evaluated on video.** Its published metrics (precision
-   0.846 / recall 0.800 / mAP@50 0.877 on a held-out test split) are **per frame, on still
-   images**. Per-*incident* recall is certainly higher — a real fall is sampled dozens of times —
-   but it is not measured, and neither is the false-alert rate over ordinary footage. It also has
-   no validation against floor-level hard negatives (sit-ups, crouching, lying on a sofa). The
-   evaluation framework that would measure all of this now exists and is tested
-   ([`ml/validation/`](ml/validation/README.md)), but **it has never been run on real footage,
-   because no labelled corpus exists** — building the framework did not close this gap, it only
-   made the gap closable. Treat every operational figure as unknown. See
-   [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md) for the full list.
-2. **Deleting a video while it is being analysed is an unresolved backend race.** The analysis
-   worker and the delete endpoint can interleave; the failure is contained (the worker records a
-   failed status rather than crashing the service), but the correct fix — cooperative cancellation
-   of the worker — is not implemented.
+1. **The fall detector raises far too many false alerts on ordinary activity.** This is now
+   measured rather than suspected. Running the production inference path over 20 labelled clips
+   from the [UR Fall Detection Dataset](https://fenix.ur.edu.pl/~mkepski/ds/uf.html) — 10 falls
+   and 10 activities of daily living, same rooms, same camera — gives:
+
+   | | |
+   |---|---:|
+   | Incident recall | 90% (9 of 10 falls) |
+   | Median detection latency | 0.66 s |
+   | Incident precision | 45% (9 of 20 alerts) |
+   | **False alerts / hour of ordinary activity** | **574** |
+
+   Reproduce with `python -m ml.validation.fetch_urfd` then `python -m ml.validation.evaluate`.
+
+   **This is a model limitation, not a tuning problem, and no threshold fixes it.** On the
+   non-fall clips the detector emits a `Fall` box on *more* frames than it does on the real falls
+   (58% vs 25–47%), at confidences that overlap the true positives (0.85 vs 0.87). Raising the
+   confidence floor removes true falls before it removes false ones; lengthening the sustain
+   window removes them in the wrong order too, because a person lying down stays down longer than
+   a person who has fallen. The published metrics (precision 0.846 / recall 0.800 / mAP@50 0.877)
+   remain **per frame, on still images**, and do not survive contact with continuous video of
+   ordinary activity.
+
+   The detector finds falls well and is close to useless at ignoring everything else, so **it is
+   not fit for unattended alerting.** It is usable as a review aid, where a human sees the clip.
+   Fixing it needs retraining with hard negatives, not configuration. See
+   [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md).
+
+   The sample is small (20 clips, 1.8 minutes, one dataset, one viewpoint, two rooms, one
+   subject), so treat the exact figures as indicative. The direction of the result is not
+   subtle enough to be sampling noise.
+2. **`HEAD` is not supported on the media endpoints.** They answer `405`, which is FastAPI's
+   default for a `GET`-only route rather than anything specific to streaming. Browsers play video
+   with ranged `GET`s, so playback is unaffected; a client that probes with `HEAD` first (some
+   download managers, some proxies) has to issue a ranged `GET` instead.
 3. **Analysis duration varies with machine load.** Everything here is CPU-verified with no GPU
    requirement, so wall-clock analysis time for a given video depends heavily on what else the
    host is doing.

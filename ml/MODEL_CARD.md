@@ -138,24 +138,36 @@ confidence floor):
 Stated plainly, because deploying this into a care setting without knowing them
 would be irresponsible.
 
-1. **No video-level *results* yet — the framework exists, the footage does
-   not.** Everything above is per-frame on stills. The end-to-end quantities
-   that matter — falls detected per fall that happened, and false alerts per
-   hour of ordinary footage — are **still unmeasured**.
+1. **Measured on video, the false-alert rate makes it unfit for unattended
+   alerting.** Everything above is per-frame on stills. The end-to-end
+   quantities that matter have now been measured, on 20 labelled clips from the
+   UR Fall Detection Dataset (10 falls, 10 activities of daily living, same
+   rooms and camera for both):
 
-   What changed: `ml/validation/` now implements the evaluation end to end. It
-   drives the real production inference path over a labelled corpus of clips
-   and reports incident recall, incident precision, false alerts/hour and
-   detection latency, plus a sweep over `FALL_DETECTOR_MIN_CONFIDENCE` and
-   `FALL_DETECTOR_MIN_SUSTAINED_SECONDS`. It refuses to run against anything
-   but the trained checkpoint, and records that checkpoint's sha256 in every
-   report.
+   | Quantity | Result |
+   |---|---:|
+   | Incident recall | 90% (9 of 10) |
+   | Incident precision | 45% (9 of 20 alerts) |
+   | False alerts / hour of ordinary activity | **574** |
+   | Median detection latency | 0.66 s |
 
-   What has not changed: **no labelled video corpus exists yet**, so no
-   video-level number has been produced. Evaluation framework ready; real video
-   validation pending labelled footage. Nothing in this model card is
-   video-level evidence, and the thresholds below remain unvalidated defaults
-   chosen by reasoning, not by measurement. See `ml/validation/README.md`.
+   Reproduce: `python -m ml.validation.fetch_urfd` then
+   `python -m ml.validation.evaluate` (the corpus is CC BY-NC-SA and is not
+   redistributed with this repository; the fetch script downloads it).
+
+   **The thresholds below cannot fix this.** On the non-fall clips the detector
+   emits a `Fall` box on a *larger* fraction of frames than on the real falls
+   (58% vs 25-47%), at overlapping confidences (0.85 vs 0.87). Both knobs -
+   `FALL_DETECTOR_MIN_CONFIDENCE` and `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` -
+   are ordered against us: raising either removes true falls before it removes
+   false alerts, because a person who lies down deliberately holds the posture
+   longer than someone who has fallen. This is a training-data problem (see
+   limitation 2), not a configuration one.
+
+   The sample is small - 20 clips, 1.8 minutes, one dataset, one viewpoint, two
+   rooms, one subject - so the exact figures are indicative and the recall
+   figure in particular moves 10 points per clip. The direction is not subtle
+   enough to be sampling noise. See `ml/validation/README.md`.
 2. **No hard-negative validation for floor-level activity.** The background
    images are PASCAL VOC — ordinary photographs of upright people. They do not
    contain someone doing sit-ups, a child playing on the floor, a person
