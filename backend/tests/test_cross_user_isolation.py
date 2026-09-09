@@ -76,7 +76,10 @@ def other_users_upload(db, other_user, tmp_path):
 def test_viewer_cannot_list_another_users_upload_alerts(client, viewer_headers, other_users_upload):
     response = client.get("/api/alerts", headers=viewer_headers)
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["items"] == []
+    # The count is scoped too: a total that included rows the caller cannot
+    # read would disclose how many exist.
+    assert response.json()["total"] == 0
 
 
 def test_viewer_cannot_read_another_users_upload_alert_by_id(client, viewer_headers, other_users_upload):
@@ -94,13 +97,14 @@ def test_viewer_cannot_reach_another_users_alerts_via_the_upload_filter(
     upload_id = other_users_upload["upload"].id
     response = client.get("/api/alerts", params={"video_upload_id": upload_id}, headers=viewer_headers)
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["items"] == []
+    assert response.json()["total"] == 0
 
 
 def test_operator_can_see_all_upload_alerts(client, operator_headers, other_users_upload):
     response = client.get("/api/alerts", headers=operator_headers)
     assert response.status_code == 200
-    assert [a["id"] for a in response.json()] == [other_users_upload["event"].id]
+    assert [a["id"] for a in response.json()["items"]] == [other_users_upload["event"].id]
 
 
 # --- recordings -----------------------------------------------------------
@@ -108,7 +112,8 @@ def test_operator_can_see_all_upload_alerts(client, operator_headers, other_user
 def test_viewer_cannot_list_another_users_upload_recordings(client, viewer_headers, other_users_upload):
     response = client.get("/api/recordings", headers=viewer_headers)
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["items"] == []
+    assert response.json()["total"] == 0
 
 
 def test_viewer_cannot_read_another_users_recording_by_id(client, viewer_headers, other_users_upload):
@@ -131,11 +136,11 @@ def test_owner_can_still_read_their_own_upload_results(client, other_user, other
 
     alerts = client.get("/api/alerts", headers=headers)
     assert alerts.status_code == 200
-    assert [a["id"] for a in alerts.json()] == [other_users_upload["event"].id]
+    assert [a["id"] for a in alerts.json()["items"]] == [other_users_upload["event"].id]
 
     recordings = client.get("/api/recordings", headers=headers)
     assert recordings.status_code == 200
-    assert [r["id"] for r in recordings.json()] == [other_users_upload["recording"].id]
+    assert [r["id"] for r in recordings.json()["items"]] == [other_users_upload["recording"].id]
 
     stream = client.get(f"/api/recordings/{other_users_upload['recording'].id}/video", headers=headers)
     assert stream.status_code == 200
@@ -144,7 +149,7 @@ def test_owner_can_still_read_their_own_upload_results(client, other_user, other
 def test_recording_payload_does_not_expose_the_server_file_path(client, other_user, other_users_upload, auth_headers_for):
     response = client.get("/api/recordings", headers=auth_headers_for(other_user))
     assert response.status_code == 200
-    assert "file_path" not in response.json()[0]
+    assert "file_path" not in response.json()["items"][0]
 
 
 # --- camera-sourced rows stay shared -------------------------------------
@@ -182,8 +187,8 @@ def test_camera_alerts_and_recordings_remain_visible_to_every_user(client, viewe
     ))
     db.commit()
 
-    assert len(client.get("/api/alerts", headers=viewer_headers).json()) == 1
-    assert len(client.get("/api/recordings", headers=viewer_headers).json()) == 1
+    assert len(client.get("/api/alerts", headers=viewer_headers).json()["items"]) == 1
+    assert len(client.get("/api/recordings", headers=viewer_headers).json()["items"]) == 1
 
 
 # --- analytics ------------------------------------------------------------

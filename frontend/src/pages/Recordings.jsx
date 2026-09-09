@@ -1,36 +1,53 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import apiClient from '../api/client'
+import Pagination from '../components/Pagination'
 import RecordingRow from '../components/RecordingRow'
 import VideoModal from '../components/VideoModal'
-import { eventTypeMeta } from '../lib/format'
+import { DETECTION_EVENT_TYPES, eventTypeMeta } from '../lib/format'
 
+const PAGE_SIZE = 20
+
+// Filters run on the SERVER now, not over the rows that happen to be on
+// screen. Client-side filtering was correct while the API returned every
+// row; with paging it would hide matches sitting on other pages and leave
+// the page count describing the unfiltered list.
 export default function Recordings() {
   const [recordings, setRecordings] = useState([])
+  const [pageInfo, setPageInfo] = useState({ page: 1, pages: 0, total: 0 })
   const [cameras, setCameras] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [cameraFilter, setCameraFilter] = useState('all')
   const [eventFilter, setEventFilter] = useState('all')
+  const [page, setPage] = useState(1)
   const [viewingRecording, setViewingRecording] = useState(null)
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true)
-      setError('')
-      try {
-        const [recordingsRes, camerasRes] = await Promise.all([
-          apiClient.get('/api/recordings'),
-          apiClient.get('/api/cameras'),
-        ])
-        setRecordings(recordingsRes.data)
-        setCameras(camerasRes.data)
-      } catch {
-        setError('Failed to load recordings.')
-      } finally {
-        setLoading(false)
-      }
+  const fetchRecordings = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const params = { page, page_size: PAGE_SIZE }
+      if (cameraFilter !== 'all') params.camera_id = cameraFilter
+      if (eventFilter !== 'all') params.trigger_action = eventFilter
+      const { data } = await apiClient.get('/api/recordings', { params })
+      setRecordings(data.items)
+      setPageInfo({ page: data.page, pages: data.pages, total: data.total })
+    } catch {
+      setError('Failed to load recordings.')
+    } finally {
+      setLoading(false)
     }
-    fetchData()
+  }, [page, cameraFilter, eventFilter])
+
+  useEffect(() => {
+    fetchRecordings()
+  }, [fetchRecordings])
+
+  useEffect(() => {
+    apiClient
+      .get('/api/cameras')
+      .then(({ data }) => setCameras(data))
+      .catch(() => setCameras([]))
   }, [])
 
   const cameraNameById = useMemo(() => {
@@ -41,28 +58,19 @@ export default function Recordings() {
     return map
   }, [cameras])
 
-  const eventTypes = useMemo(() => {
-    const set = new Set(recordings.map((r) => r.trigger_action).filter(Boolean))
-    return Array.from(set)
-  }, [recordings])
-
-  const filtered = useMemo(() => {
-    return recordings
-      .filter((r) => cameraFilter === 'all' || String(r.camera_id) === String(cameraFilter))
-      .filter((r) => eventFilter === 'all' || r.trigger_action === eventFilter)
-      .sort((a, b) => {
-        const aTime = new Date(a.event_timestamp || a.created_at).getTime()
-        const bTime = new Date(b.event_timestamp || b.created_at).getTime()
-        return bTime - aTime
-      })
-  }, [recordings, cameraFilter, eventFilter])
+  // A filter change makes the current page number meaningless - page 4 of
+  // the unfiltered list is very unlikely to exist in the filtered one.
+  const applyFilter = (setter) => (value) => {
+    setter(value)
+    setPage(1)
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-100">Recordings</h1>
         <p className="mt-1 text-sm text-slate-400">
-          {filtered.length} recording{filtered.length === 1 ? '' : 's'}
+          {pageInfo.total} recording{pageInfo.total === 1 ? '' : 's'}
         </p>
       </div>
 
@@ -73,7 +81,7 @@ export default function Recordings() {
             id="recordings-camera-filter"
             className="sc-input"
             value={cameraFilter}
-            onChange={(e) => setCameraFilter(e.target.value)}
+            onChange={(e) => applyFilter(setCameraFilter)(e.target.value)}
           >
             <option value="all">All Cameras</option>
             {cameras.map((c) => (
@@ -89,10 +97,10 @@ export default function Recordings() {
             id="recordings-event-type-filter"
             className="sc-input"
             value={eventFilter}
-            onChange={(e) => setEventFilter(e.target.value)}
+            onChange={(e) => applyFilter(setEventFilter)(e.target.value)}
           >
             <option value="all">All Event Types</option>
-            {eventTypes.map((type) => (
+            {DETECTION_EVENT_TYPES.map((type) => (
               <option key={type} value={type}>
                 {eventTypeMeta(type).label}
               </option>
@@ -109,7 +117,7 @@ export default function Recordings() {
 
       {loading ? (
         <div className="py-24 text-center text-slate-500">Loading recordings…</div>
-      ) : filtered.length === 0 ? (
+      ) : recordings.length === 0 ? (
         <div className="sc-card py-24 text-center text-slate-500">No recordings found.</div>
       ) : (
         <div className="sc-card overflow-x-auto">
@@ -125,7 +133,7 @@ export default function Recordings() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((recording) => (
+              {recordings.map((recording) => (
                 <RecordingRow
                   key={recording.id}
                   recording={recording}
@@ -137,6 +145,16 @@ export default function Recordings() {
           </table>
         </div>
       )}
+
+      <Pagination
+        page={pageInfo.page}
+        pages={pageInfo.pages}
+        total={pageInfo.total}
+        pageSize={PAGE_SIZE}
+        onChange={setPage}
+        busy={loading}
+        noun="recordings"
+      />
 
       <VideoModal recording={viewingRecording} onClose={() => setViewingRecording(null)} />
     </div>

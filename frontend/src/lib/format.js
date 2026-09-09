@@ -65,6 +65,13 @@ export const EVENT_TYPE_META = {
   scheduled: { label: 'Scheduled', icon: '\u{23F0}', color: 'text-slate-300' },
 }
 
+// The event types the detection pipeline actually produces (see the
+// backend's detection/engine.py). The filter dropdowns list these rather
+// than deriving options from whatever rows came back: with paging, the
+// current page is a sample, so deriving from it would silently drop
+// filter options that exist elsewhere in the collection.
+export const DETECTION_EVENT_TYPES = ['fall', 'violence', 'crowd', 'abandoned_object']
+
 export function eventTypeMeta(triggerAction) {
   const key = String(triggerAction || '').toLowerCase()
   return (
