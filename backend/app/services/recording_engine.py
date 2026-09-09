@@ -124,10 +124,24 @@ def _handle_event(camera_id: int, trigger_action: str, confidence_score: float, 
 # actually work here. `mp4v` is kept as the last resort: still the wrong
 # answer for a browser, but better than failing to record at all, and it
 # is now only ever reached if nothing above it opened.
+#
+# VP8 sits ahead of VP9 on measurement, not preference. Both are equally
+# playable in every browser this targets, but libvpx-vp9 through OpenCV's
+# VideoWriter has no way to set a speed/deadline, so it runs at its slow
+# default. On the reference container (4 CPUs) encoding 180 frames of
+# 576x1024 - one fall clip - cost:
+#
+#     vp09   26.61s   PSNR 39.91 dB   SSIM 0.9722   4.94 MB
+#     VP80    5.58s   PSNR 39.64 dB   SSIM 0.9712   4.06 MB
+#
+# 4.8x faster, 18% smaller, and 0.27 dB apart - well inside the ~1 dB a
+# viewer could notice, and VP8's WORST frame is actually the better of
+# the two (38.92 vs 38.37 dB). Clip encoding runs inline in the upload
+# analyser, so this was ~70% of an upload's wall-clock time.
 _CODEC_LADDER = (
     ("avc1", ".mp4"),    # H.264 - ideal, needs a libx264-enabled FFmpeg
-    ("vp09", ".webm"),   # VP9  - Chrome/Firefox/Edge, Safari 14.1+
-    ("VP80", ".webm"),   # VP8  - widest legacy browser support
+    ("VP80", ".webm"),   # VP8  - widest browser support, ~4.8x faster than VP9
+    ("vp09", ".webm"),   # VP9  - better compression, far slower to encode
     ("mp4v", ".mp4"),    # MPEG-4 Part 2 - NOT browser-playable, last resort
 )
 
