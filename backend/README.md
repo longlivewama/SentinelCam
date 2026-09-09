@@ -99,6 +99,25 @@ data. Unset `DATABASE_URL` (or point it at `sentinelcam_test`) rather than worki
 refusal; `SENTINELCAM_ALLOW_NON_TEST_DATABASE=1` overrides it if you genuinely mean to wipe
 the database you named.
 
+## Backfilling clips written before the codec fix
+
+Clips recorded before `open_writer` gained its codec ladder were written as
+MPEG-4 Part 2 (`mp4v`) — valid `.mp4` files that no current browser can decode,
+so they render an empty player. The encoder fix is forward-only; existing rows
+need rewriting:
+
+```bash
+python scripts/backfill_clip_codecs.py            # report what would change
+python scripts/backfill_clip_codecs.py --apply
+```
+
+It re-encodes through the same ladder new recordings use, verifies the result
+decodes before repointing the row, and keeps each superseded original until you
+pass `--delete-originals`. Files that no recording row points at are reported
+but never touched — without a row they cannot be served. In Docker, run it as
+the uid the app runs as (`--user 10001:10001`) so the rewritten files stay
+manageable by the server.
+
 ## Roles (RBAC)
 
 `User.role` is one of `admin` / `operator` / `viewer`, enforced via the `require_admin` /
