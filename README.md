@@ -31,6 +31,7 @@ production-oriented full-stack architecture.**
 - [Local development (without Docker)](#local-development-without-docker)
 - [Configuration](#configuration)
 - [Testing](#testing)
+- [Performance](#performance)
 - [Machine learning: models & datasets](#machine-learning-models--datasets)
 - [Engineering notes & design decisions](#engineering-notes--design-decisions)
 - [Security](#security)
@@ -171,10 +172,24 @@ flowchart TB
 
 **Request/authentication path.** JWT (24 h expiry) with bcrypt-hashed passwords. Password reset
 uses one-time SHA-256-hashed tokens emailed to the user — the raw token is never persisted. Every
-protected route accepts the token either as an `Authorization: Bearer` header (all JSON API calls)
-or as a `?token=` query parameter, because browsers cannot attach custom headers to `<img src>`,
-`<video src>`, `<a href>` downloads or the native WebSocket API — so the MJPEG stream, video
-playback, downloads and the realtime socket authenticate via the URL instead.
+JSON API route takes the session token as an `Authorization: Bearer` header and **only** as a
+header: a `?token=` query parameter is refused, so a credential that leaks into a URL cannot be
+replayed against the API.
+
+Browsers cannot attach a custom header to `<img src>`, `<video src>` or an `<a href>` download, so
+the four media endpoints have to take a credential in the URL. What travels there is **not** the
+session token. The client calls `POST /api/{recordings|video-uploads|cameras}/{id}/media-token`
+first and gets a **media token**: scoped to that one resource, expiring in
+`MEDIA_TOKEN_EXPIRE_SECONDS` (default 300 s), carrying no role, refused as a bearer credential
+anywhere, and refused by every media endpoint except the one it names. A media token recovered
+from an access log buys the ability to re-watch the clip whose URL it came from, for a few
+minutes. On top of that, `app/core/logging_utils.py` redacts `token=` out of every log record in
+the process, so neither credential is written down in the first place.
+
+The realtime WebSocket still authenticates with the session token in its handshake URL — a
+long-lived socket cannot re-authenticate per message, and it is opened by the native WebSocket
+API, which has no header either. It is covered by the same log redaction, and it rejects media
+tokens outright. See [Known limitations](#known-limitations).
 
 **Authorization.** Two layers. *Role* gates, enforced by FastAPI dependencies (`require_admin`,
 `require_operator`) on every mutating endpoint: `admin` has full access including user management;
@@ -384,6 +399,7 @@ file is gitignored, and only `.env.example` templates are committed.
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `JWT_SECRET_KEY` | JWT signing secret. The app **refuses to start** if left at its insecure default while `ENVIRONMENT=production` |
+| `MEDIA_TOKEN_EXPIRE_SECONDS` | Lifetime of the short-lived, resource-scoped token the media endpoints accept in a URL (default `300`) |
 | `CORS_ORIGINS` | Comma-separated allowed frontend origins |
 | `FRONTEND_URL` | Base URL used to build links in emails (e.g. password reset) |
 | `NOTIFICATION_CHANNELS` | Comma-separated enabled channels (`email` works out of the box) |
@@ -405,13 +421,13 @@ The full commented list lives in [`.env.example`](.env.example),
 
 ## Testing
 
-**261 automated tests across three suites**, all currently passing, plus a five-job CI pipeline.
+**618 automated tests across three suites**, all currently passing, plus a five-job CI pipeline.
 
 | Suite | Count | What it covers |
 |---|---:|---|
-| **Backend** (pytest) | **169** | Security primitives, fall-detection logic (both the trained-model gate and the pose heuristic), the committed model artifact's contract, cross-user isolation, auth & RBAC, cameras, alerts, recordings, upload validation, HTTP Range handling, realtime delivery scoping, analytics, rate limiting, Alembic migrations + schema-drift detection, email notifier, and an end-to-end video analysis over a real decoded video |
-| **Frontend** (Vitest + Testing Library) | **76** | Auth pages, route guards, upload workflow (drag-drop, validation, progress, delete), the results screen's in-video timestamps and detector labelling, system status including the model-fallback warning, dashboard, formatting helpers, Zustand stores |
-| **End-to-end** (Playwright) | **16** | Real Chromium against the real Docker Compose stack — signup, login, logout, forgot/reset password (reading the actual email out of Mailpit's API), camera CRUD + RBAC, alert acknowledgement, recording playback, and the full upload → process → view-results workflow |
+| **Backend** (pytest) | **516** | Security primitives, media-token scoping and expiry, log redaction, pagination (ordering, tiebreakers, ownership, IDOR), fall-detection logic (both the trained-model gate and the pose heuristic), the committed model artifact's contract, cross-user isolation, auth & RBAC, cameras, alerts, recordings, upload validation, HTTP Range handling, realtime delivery scoping, analytics, rate limiting, Alembic migrations + schema-drift detection, email notifier, the ML validation framework, and an end-to-end video analysis over a real decoded video |
+| **Frontend** (Vitest + Testing Library) | **108** | Auth pages, route guards, media-token minting and retry, pagination controls and server-side filtering, upload workflow (drag-drop, validation, progress, delete), the results screen's in-video timestamps and detector labelling, system status including the model-fallback warning, dashboard, formatting helpers, Zustand stores |
+| **End-to-end** (Playwright) | **18** | Real Chromium against the real Docker Compose stack — signup, login, logout, forgot/reset password (reading the actual email out of Mailpit's API), camera CRUD + RBAC, alert acknowledgement, recording playback (the clip is decoded in the browser, not merely mounted), and the full upload → process → view-results workflow |
 | **Docker** | 4 services | `postgres`, `backend`, `frontend`, `mailpit` — all healthy under `docker compose up` |
 
 ```bash
@@ -437,6 +453,49 @@ relies on Postgres-specific behaviour (boolean filters, timezone-aware timestamp
 places that sqlite would give false confidence.
 
 No coverage percentage is published here, because none has been measured.
+
+---
+
+## Performance
+
+Measured end to end on the live Docker stack — a real upload of the real fall video through the
+real API, timed to `status=completed`. Host: Apple M5, backend container limited to 4 CPUs / 4 GB.
+
+Test video: 576x1024, 30 fps, 878 frames, **29.27 s**.
+
+| | Before | After |
+|---|---:|---:|
+| Wall clock | 77.57 s | **36.33 s** (median of 5) |
+| Effective throughput | 11.3 frames/s | **24.2 frames/s** |
+| vs realtime | 2.65x slower | 1.24x slower |
+| Falls detected | 2 (t=1.67 s / 0.70, t=20.00 s / 0.74) | **identical** |
+| Persons detected | 3 | **identical** |
+
+**53% faster, with byte-identical detection output** — inference is untouched.
+
+The win is not in the model. Profiling showed clip encoding was ~70% of the wall clock: the codec
+ladder in `recording_engine.open_writer` preferred VP9, and libvpx-vp9 through OpenCV's
+`VideoWriter` has no way to set a speed/deadline, so it ran at its slow default. VP8 sits ahead of
+it now, on measurement rather than preference — encoding one 180-frame clip in the reference
+container:
+
+| Codec | Encode | Bytes | PSNR mean | PSNR min | SSIM |
+|---|---:|---:|---:|---:|---:|
+| `avc1` (H.264) | does not open — the stock wheel ships FFmpeg without libx264 | | | | |
+| `vp09` (VP9) | 26.6 s | 4 938 089 | 39.91 dB | 38.37 dB | 0.9722 |
+| **`VP80` (VP8)** | **5.6 s** | **4 062 534** | **39.64 dB** | **38.92 dB** | **0.9712** |
+| `mp4v` | 0.4 s | 1 580 629 | 38.65 dB | 37.83 dB | 0.9641 |
+
+4.8x faster, 18% smaller, 0.27 dB below VP9 on mean PSNR — well inside the ~1 dB a viewer could
+notice — and with a *better* worst-frame PSNR. Both are equally playable in every browser this
+targets. `mp4v` stays last regardless of speed: no current browser can decode it, which was a
+real incident here.
+
+**Not claimed: this is not realtime.** 36.3 s to analyse 29.3 s of footage is 1.24x slower than
+realtime. A cold container adds ~37 s of one-time model loading to the first upload after a
+restart. What remains is inference — roughly evenly split between the pose model (13.6 s) and the
+fall detector (10.6 s) over 176 processed frames — and it cannot be moved to a GPU in the Linux
+container this ships in: MPS is macOS-only and there is no CUDA device.
 
 ---
 
@@ -624,13 +683,17 @@ Planned:
       crouching, a child playing, someone lying on a sofa), none of which the current test split
       contains. The evaluator groups every false alert by the activity that produced it, so this
       lands with the corpus above rather than needing separate tooling.
-- [ ] **Inference performance** — batched/strided frame processing and optional GPU acceleration
-      for faster analysis of long recordings.
+- [ ] **Inference performance** — batched frame processing and optional GPU acceleration for
+      faster analysis of long recordings. Profiling showed inference is no longer the dominant
+      cost (clip encoding was, and is fixed — see [Performance](#performance)); the remaining
+      ~23 s per 29 s clip is split roughly evenly between the pose model and the fall detector,
+      and MPS/CUDA are unavailable inside the Linux container the stack actually ships.
 - [ ] **Horizontally scalable realtime** — move the rate limiter and event broadcaster to Redis so
       the backend can run multiple workers or instances.
-- [ ] **Pagination** on the alert, recording and upload listings. They are now bounded (500
-      newest by default, 1000 max) rather than unbounded, but a deployment past that cap needs
-      real paging rather than a larger ceiling.
+- [x] **Pagination** on the alert, recording, upload and admin-user listings — done. Offset
+      paging at the database with a `{items, page, page_size, total, pages}` envelope, ownership
+      filtering applied in SQL before the count, and a primary-key tiebreaker on every sort so a
+      row cannot appear on two pages. See `app/core/pagination.py`.
 - [ ] **Richer analytics** — per-camera heatmaps, time-of-day distributions, exportable reports.
 - [ ] **More notification channels** — SMS and WhatsApp providers behind the existing interfaces.
 - [ ] **Observability** — structured logging, metrics and health dashboards.
@@ -677,27 +740,51 @@ Stated plainly, because they matter when reading the rest of this document:
    The sample is small (20 clips, 1.8 minutes, one dataset, one viewpoint, two rooms, one
    subject), so treat the exact figures as indicative. The direction of the result is not
    subtle enough to be sampling noise.
-2. **`HEAD` is not supported on the media endpoints.** They answer `405`, which is FastAPI's
+
+   **Validation status: evaluation framework ready; independent real-world video validation
+   pending labelled footage.** The framework measures ground truth against predicted events with
+   temporal matching, and reports TP/FP/FN, precision, recall, F1, a threshold sweep,
+   hard-negative analysis, confidence distributions and per-condition breakdowns. What does not
+   exist is the corpus: [`ml/validation/README.md`](ml/validation/README.md) specifies the dataset
+   needed — falls by direction (forward/backward/sideways) and speed (slow/fast), ten required
+   hard-negative activities, and variation across lighting, camera angle, distance, occlusion and
+   resolution. `Corpus.missing_coverage()` checks a corpus against that specification
+   mechanically, and every report prints what is missing on its own front page. The URFD corpus
+   above satisfies **none** of those dimensions, which is why its numbers are labelled indicative
+   rather than validated.
+2. **The realtime WebSocket still carries the session token in its handshake URL.** The media
+   endpoints no longer do — they take a short-lived, resource-scoped media token instead (see
+   [Architecture](#architecture)) — but a WebSocket is opened by the native browser API, which
+   has no header, and it is long-lived, so it cannot re-authenticate per message the way an HTTP
+   request does. Mitigations in place: the socket closes itself at the token's own `exp`, delivery
+   is scoped to that identity, media tokens are refused outright, and `token=` is redacted from
+   every log record. Residual exposure is narrower than it was for media URLs — a WebSocket URL
+   is not a navigation, so it does not enter browser history or generate a `Referer` — but the
+   credential is still a full-privilege one in a URL. Closing it properly needs a scoped,
+   renewable socket token and reconnect handling on the client.
+3. **`HEAD` is not supported on the media endpoints.** They answer `405`, which is FastAPI's
    default for a `GET`-only route rather than anything specific to streaming. Browsers play video
    with ranged `GET`s, so playback is unaffected; a client that probes with `HEAD` first (some
    download managers, some proxies) has to issue a ranged `GET` instead.
-3. **Analysis duration varies with machine load.** Everything here is CPU-verified with no GPU
-   requirement, so wall-clock analysis time for a given video depends heavily on what else the
-   host is doing.
-4. **Violence, crowd and abandoned-object detectors are heuristics**, not trained models — a known
+4. **Analysis duration varies with machine load, and is not realtime.** Everything here is
+   CPU-verified with no GPU requirement, so wall-clock analysis time for a given video depends
+   heavily on what else the host is doing — one of six benchmark runs took 54 s where the other
+   five took 35–36 s. See [Performance](#performance) for the measured figures and what is left
+   in them.
+5. **Violence, crowd and abandoned-object detectors are heuristics**, not trained models — a known
    and documented scope boundary, not an accidental gap.
-5. **The earlier keypoint classifier's metrics are optimistic** — small, narrow, largely
+6. **The earlier keypoint classifier's metrics are optimistic** — small, narrow, largely
    synthetic dataset; see [`ml/README.md`](ml/README.md). It is off by default and is not the
    production detector.
-6. **Single-process assumptions.** The in-memory rate limiter and realtime broadcaster are
+7. **Single-process assumptions.** The in-memory rate limiter and realtime broadcaster are
    per-process; multi-worker deployment needs a shared backing store.
-7. **E2E coverage boundaries.** The Playwright suite does not cover live-camera streaming (no
+8. **E2E coverage boundaries.** The Playwright suite does not cover live-camera streaming (no
    camera hardware in CI) or a genuine ML-detected fall — its upload fixture is deliberately
    person-free so the assertion stays honest. Both were verified manually in a real browser.
-8. **Two residual dependency advisories are accepted rather than force-fixed:** `ecdsa` (reachable
+9. **Two residual dependency advisories are accepted rather than force-fixed:** `ecdsa` (reachable
    only via ECDSA JWT algorithms; this app uses HS256 exclusively) and `pyasn1` (pinned by
    `python-jose`'s own constraint). Both are documented rather than hidden.
-9. **Untested externally:** a real RTSP IP camera (verified against a USB webcam instead), and
+10. **Untested externally:** a real RTSP IP camera (verified against a USB webcam instead), and
    real SMTP delivery (verified against Mailpit).
 
 ---
