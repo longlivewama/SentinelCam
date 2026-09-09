@@ -28,10 +28,12 @@ export default function Dashboard() {
     try {
       const [summaryRes, alertsRes] = await Promise.all([
         apiClient.get('/api/analytics/summary'),
-        apiClient.get('/api/alerts', { params: { limit: 6 } }),
+        // A deliberately bounded 'recent N' widget, so it asks for one
+        // small page rather than paging - see core/pagination.py.
+        apiClient.get('/api/alerts', { params: { page_size: 6 } }),
       ])
       setSummary(summaryRes.data)
-      setRecentAlerts(alertsRes.data)
+      setRecentAlerts(alertsRes.data.items)
     } catch {
       setError('Failed to load dashboard data.')
     } finally {
@@ -45,8 +47,12 @@ export default function Dashboard() {
   const fetchUploads = async () => {
     setUploadsError('')
     try {
-      const { data } = await apiClient.get('/api/video-uploads')
-      setRecentUploads(data)
+      // Ask for exactly what this card renders, so the fetch and the
+      // slice below cannot drift apart.
+      const { data } = await apiClient.get('/api/video-uploads', {
+        params: { page_size: RECENT_ANALYSES_LIMIT },
+      })
+      setRecentUploads(data.items)
     } catch {
       setUploadsError('Could not load recent analyses.')
     }

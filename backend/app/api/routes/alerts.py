@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_operator
+from app.core.pagination import Page, PageParams, paginate
 from app.core.scoping import can_access_upload_id, scope_events
 from app.database import get_db
 from app.models.event import Event
@@ -12,9 +13,6 @@ from app.models.user import User
 from app.schemas.event import EventOut
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
-
-DEFAULT_LIMIT = 200
-MAX_LIMIT = 1000
 
 
 def _get_visible_alert_or_404(alert_id: int, db: Session, user: User) -> Event:
@@ -28,17 +26,18 @@ def _get_visible_alert_or_404(alert_id: int, db: Session, user: User) -> Event:
     return alert
 
 
-@router.get("", response_model=List[EventOut])
+@router.get("", response_model=Page[EventOut])
 def list_alerts(
     camera_id: Optional[int] = None,
     video_upload_id: Optional[int] = None,
     event_type: Optional[str] = None,
     acknowledged: Optional[bool] = None,
-    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Ownership filter first, so no later branch can accidentally widen it.
+    # Ownership filter first, so no later branch can accidentally widen it -
+    # and so `total` describes this user's alerts rather than everyone's.
     query = scope_events(db.query(Event), current_user)
     if camera_id is not None:
         query = query.filter(Event.camera_id == camera_id)
@@ -48,7 +47,9 @@ def list_alerts(
         query = query.filter(Event.event_type == event_type)
     if acknowledged is not None:
         query = query.filter(Event.acknowledged == acknowledged)
-    return query.order_by(Event.timestamp.desc()).limit(limit).all()
+    # id breaks ties: a fall's Event and Recording are written together, so
+    # several alerts routinely share a timestamp to the microsecond.
+    return paginate(query, page, Event.timestamp.desc(), Event.id.desc())
 
 
 @router.get("/{alert_id}", response_model=EventOut)

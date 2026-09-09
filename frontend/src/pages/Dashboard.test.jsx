@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import Dashboard from './Dashboard'
 import apiClient from '../api/client'
+import { pageOf } from '../test/apiFixtures'
 
 vi.mock('../api/client', () => ({
   default: { get: vi.fn() },
@@ -32,8 +33,8 @@ describe('Dashboard page', () => {
   it('shows a loading state, then renders summary stats', async () => {
     apiClient.get.mockImplementation((url) => {
       if (url === '/api/analytics/summary') return Promise.resolve({ data: SUMMARY })
-      if (url === '/api/alerts') return Promise.resolve({ data: [] })
-      if (url === '/api/video-uploads') return Promise.resolve({ data: [] })
+      if (url === '/api/alerts') return Promise.resolve({ data: pageOf([]) })
+      if (url === '/api/video-uploads') return Promise.resolve({ data: pageOf([]) })
       return Promise.reject(new Error('unexpected url'))
     })
 
@@ -49,10 +50,10 @@ describe('Dashboard page', () => {
   it('lists recent analyses, flags the latest, and explains a failed one', async () => {
     apiClient.get.mockImplementation((url) => {
       if (url === '/api/analytics/summary') return Promise.resolve({ data: SUMMARY })
-      if (url === '/api/alerts') return Promise.resolve({ data: [] })
+      if (url === '/api/alerts') return Promise.resolve({ data: pageOf([]) })
       if (url === '/api/video-uploads') {
         return Promise.resolve({
-          data: [
+          data: pageOf([
             {
               id: 2,
               original_filename: 'newest.mp4',
@@ -72,7 +73,7 @@ describe('Dashboard page', () => {
               persons_detected: 0,
               created_at: '2026-01-01T00:00:00Z',
             },
-          ],
+          ]),
         })
       }
       return Promise.reject(new Error('unexpected url'))
@@ -89,7 +90,7 @@ describe('Dashboard page', () => {
   it('keeps the rest of the dashboard usable when the analyses request fails', async () => {
     apiClient.get.mockImplementation((url) => {
       if (url === '/api/analytics/summary') return Promise.resolve({ data: SUMMARY })
-      if (url === '/api/alerts') return Promise.resolve({ data: [] })
+      if (url === '/api/alerts') return Promise.resolve({ data: pageOf([]) })
       return Promise.reject(new Error('uploads unavailable'))
     })
 

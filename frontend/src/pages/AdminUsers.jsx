@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import apiClient from '../api/client'
 import Modal from '../components/Modal'
+import Pagination from '../components/Pagination'
 import { useAuthStore } from '../store/authStore'
 import { toast } from '../store/toastStore'
 import { formatDateTime } from '../lib/format'
@@ -93,30 +94,37 @@ function AddUserForm({ onSubmit, onCancel }) {
   )
 }
 
+const PAGE_SIZE = 20
+
 export default function AdminUsers() {
   const currentUser = useAuthStore((s) => s.user)
   const [users, setUsers] = useState([])
+  const [pageInfo, setPageInfo] = useState({ page: 1, pages: 0, total: 0 })
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [busyId, setBusyId] = useState(null)
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const { data } = await apiClient.get('/api/admin/users')
-      setUsers(data)
+      const { data } = await apiClient.get('/api/admin/users', {
+        params: { page, page_size: PAGE_SIZE },
+      })
+      setUsers(data.items)
+      setPageInfo({ page: data.page, pages: data.pages, total: data.total })
     } catch {
       setError('Failed to load users.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [page])
 
   useEffect(() => {
     fetchUsers()
-  }, [])
+  }, [fetchUsers])
 
   const handleCreate = async (payload) => {
     await apiClient.post('/api/admin/users', payload)
@@ -261,6 +269,16 @@ export default function AdminUsers() {
           </table>
         </div>
       )}
+
+      <Pagination
+        page={pageInfo.page}
+        pages={pageInfo.pages}
+        total={pageInfo.total}
+        pageSize={PAGE_SIZE}
+        onChange={setPage}
+        busy={loading}
+        noun="users"
+      />
 
       {showAddModal && (
         <Modal title="Add User" onClose={() => setShowAddModal(false)}>

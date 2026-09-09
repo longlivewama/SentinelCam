@@ -1,54 +1,78 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import apiClient from '../api/client'
+import Pagination from '../components/Pagination'
 import VideoModal from '../components/VideoModal'
 import { useAuthStore } from '../store/authStore'
 import { useAlertsBadgeStore } from '../store/alertsBadgeStore'
 import { toast } from '../store/toastStore'
 import { onRealtimeEvent } from '../lib/realtime'
-import { eventTypeMeta, formatDateTime } from '../lib/format'
+import { DETECTION_EVENT_TYPES, eventTypeMeta, formatDateTime } from '../lib/format'
 
+const PAGE_SIZE = 20
+
+// Both filters run on the SERVER now. Filtering the twenty rows that
+// happen to be on the current page would hide matches on every other one
+// and leave the page count describing the unfiltered list.
 export default function Alerts() {
   const isOperator = useAuthStore((s) => s.isOperator())
   const resetUnread = useAlertsBadgeStore((s) => s.reset)
 
   const [alerts, setAlerts] = useState([])
+  const [pageInfo, setPageInfo] = useState({ page: 1, pages: 0, total: 0 })
   const [cameras, setCameras] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [page, setPage] = useState(1)
   const [busyId, setBusyId] = useState(null)
   const [viewingRecording, setViewingRecording] = useState(null)
 
-  const fetchData = async () => {
+  const fetchAlerts = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const [alertsRes, camerasRes] = await Promise.all([
-        apiClient.get('/api/alerts'),
-        apiClient.get('/api/cameras'),
-      ])
-      setAlerts(alertsRes.data)
-      setCameras(camerasRes.data)
+      const params = { page, page_size: PAGE_SIZE }
+      if (typeFilter !== 'all') params.event_type = typeFilter
+      if (statusFilter !== 'all') params.acknowledged = statusFilter === 'acknowledged'
+      const { data } = await apiClient.get('/api/alerts', { params })
+      setAlerts(data.items)
+      setPageInfo({ page: data.page, pages: data.pages, total: data.total })
     } catch {
       setError('Failed to load alerts.')
     } finally {
       setLoading(false)
     }
-  }
+  }, [page, typeFilter, statusFilter])
+
+  useEffect(() => {
+    fetchAlerts()
+  }, [fetchAlerts])
 
   useEffect(() => {
     resetUnread()
-    fetchData()
+    apiClient
+      .get('/api/cameras')
+      .then(({ data }) => setCameras(data))
+      .catch(() => setCameras([]))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
+  useEffect(() => {
     const unsubscribe = onRealtimeEvent((event) => {
       if (event.type === 'alert.created') {
-        fetchData()
+        fetchAlerts()
       }
     })
     return unsubscribe
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchAlerts])
+
+  // A filter change makes the current page number meaningless - page 4 of
+  // the unfiltered list is very unlikely to exist in the filtered one.
+  const applyFilter = (setter) => (value) => {
+    setter(value)
+    setPage(1)
+  }
 
   const cameraNameById = useMemo(() => {
     const map = {}
@@ -57,19 +81,6 @@ export default function Alerts() {
     })
     return map
   }, [cameras])
-
-  const filtered = useMemo(() => {
-    return alerts
-      .filter((a) => typeFilter === 'all' || a.event_type === typeFilter)
-      .filter(
-        (a) =>
-          statusFilter === 'all' ||
-          (statusFilter === 'acknowledged' && a.acknowledged) ||
-          (statusFilter === 'unacknowledged' && !a.acknowledged),
-      )
-  }, [alerts, typeFilter, statusFilter])
-
-  const eventTypes = useMemo(() => Array.from(new Set(alerts.map((a) => a.event_type))), [alerts])
 
   const handleAcknowledge = async (alert) => {
     setBusyId(alert.id)
@@ -95,16 +106,21 @@ export default function Alerts() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-100">Alerts</h1>
         <p className="mt-1 text-sm text-slate-400">
-          {filtered.length} alert{filtered.length === 1 ? '' : 's'}
+          {pageInfo.total} alert{pageInfo.total === 1 ? '' : 's'}
         </p>
       </div>
 
       <div className="mb-6 flex flex-wrap gap-4">
         <div className="w-full max-w-xs">
           <label htmlFor="alerts-event-type-filter" className="sc-label">Event Type</label>
-          <select id="alerts-event-type-filter" className="sc-input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          <select
+            id="alerts-event-type-filter"
+            className="sc-input"
+            value={typeFilter}
+            onChange={(e) => applyFilter(setTypeFilter)(e.target.value)}
+          >
             <option value="all">All Types</option>
-            {eventTypes.map((t) => (
+            {DETECTION_EVENT_TYPES.map((t) => (
               <option key={t} value={t}>
                 {eventTypeMeta(t).label}
               </option>
@@ -113,7 +129,12 @@ export default function Alerts() {
         </div>
         <div className="w-full max-w-xs">
           <label htmlFor="alerts-status-filter" className="sc-label">Status</label>
-          <select id="alerts-status-filter" className="sc-input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select
+            id="alerts-status-filter"
+            className="sc-input"
+            value={statusFilter}
+            onChange={(e) => applyFilter(setStatusFilter)(e.target.value)}
+          >
             <option value="all">All</option>
             <option value="unacknowledged">Unacknowledged</option>
             <option value="acknowledged">Acknowledged</option>
@@ -129,7 +150,7 @@ export default function Alerts() {
 
       {loading ? (
         <div className="py-24 text-center text-slate-500">Loading alerts…</div>
-      ) : filtered.length === 0 ? (
+      ) : alerts.length === 0 ? (
         <div className="sc-card py-24 text-center text-slate-500">No alerts found.</div>
       ) : (
         <div className="sc-card overflow-x-auto">
@@ -145,7 +166,7 @@ export default function Alerts() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((alert) => {
+              {alerts.map((alert) => {
                 const meta = eventTypeMeta(alert.event_type)
                 return (
                   <tr key={alert.id} className="border-b border-surface-800 last:border-b-0 hover:bg-surface-800/40">
@@ -201,6 +222,16 @@ export default function Alerts() {
           </table>
         </div>
       )}
+
+      <Pagination
+        page={pageInfo.page}
+        pages={pageInfo.pages}
+        total={pageInfo.total}
+        pageSize={PAGE_SIZE}
+        onChange={setPage}
+        busy={loading}
+        noun="alerts"
+      />
 
       <VideoModal recording={viewingRecording} onClose={() => setViewingRecording(null)} />
     </div>

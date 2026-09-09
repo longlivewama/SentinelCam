@@ -34,13 +34,18 @@ def test_list_and_filter_recordings(client, viewer_headers, db):
 
     resp = client.get("/api/recordings", headers=viewer_headers)
     assert resp.status_code == 200
-    assert len(resp.json()) == 1
+    assert len(resp.json()["items"]) == 1
+    assert resp.json()["total"] == 1
 
     filtered = client.get("/api/recordings", params={"camera_id": camera.id}, headers=viewer_headers)
-    assert len(filtered.json()) == 1
+    assert len(filtered.json()["items"]) == 1
 
     empty = client.get("/api/recordings", params={"camera_id": 999999}, headers=viewer_headers)
-    assert empty.json() == []
+    # An empty page still carries the envelope, and reports no pages at all
+    # rather than "page 1 of 1" over nothing.
+    assert empty.json()["items"] == []
+    assert empty.json()["total"] == 0
+    assert empty.json()["pages"] == 0
 
 
 def test_viewer_cannot_delete_recording(client, viewer_headers, db):
