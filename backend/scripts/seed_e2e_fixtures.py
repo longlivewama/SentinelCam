@@ -24,7 +24,6 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
 from sqlalchemy import func, inspect, select  # noqa: E402
@@ -38,6 +37,7 @@ from app.models.password_reset_token import PasswordResetToken  # noqa: E402
 from app.models.recording import Recording  # noqa: E402
 from app.models.user import ROLE_ADMIN, User  # noqa: E402
 from app.models.video_upload import VideoUpload  # noqa: E402
+from app.services.recording_engine import open_writer  # noqa: E402
 
 E2E_ADMIN_EMAIL = os.environ.get("E2E_ADMIN_EMAIL", "e2e-admin@example.com")
 E2E_ADMIN_PASSWORD = os.environ.get("E2E_ADMIN_PASSWORD", "e2e-admin-password123")
@@ -122,14 +122,27 @@ def _assert_wipe_was_requested(argv) -> None:
     raise SystemExit(2)
 
 
-def _write_tiny_video(path: Path):
+def _write_tiny_video(path: Path) -> Path:
+    """Writes the seeded clip through the same codec ladder real
+    recordings use, and returns the path actually written.
+
+    This used to hardcode `mp4v`, so the one recording the e2e suite
+    asserts a video player on was itself a clip no browser could decode -
+    the exact bug the ladder exists to prevent, baked into the fixture
+    data. The container follows the codec, so the caller has to use the
+    returned path rather than the one it asked for."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(path), fourcc, 10, (320, 240))
+
+    codec, writer, written = open_writer(str(path), 320, 240, 10)
+    if writer is None:
+        raise RuntimeError(f"could not open a VideoWriter for {path} with any codec")
+
     for i in range(30):
         frame = np.full((240, 320, 3), fill_value=(i * 5) % 200 + 20, dtype=np.uint8)
         writer.write(frame)
     writer.release()
+
+    return Path(written)
 
 
 def main(argv=None):
@@ -164,13 +177,12 @@ def main(argv=None):
         db.commit()
         db.refresh(camera)
 
-        clip_path = Path(settings.RECORDINGS_DIR) / str(camera.id) / "e2e_seed_fall.mp4"
-        _write_tiny_video(clip_path)
+        clip_path = _write_tiny_video(Path(settings.RECORDINGS_DIR) / str(camera.id) / "e2e_seed_fall.mp4")
 
         event_timestamp = datetime.now(timezone.utc)
         recording = Recording(
             camera_id=camera.id,
-            filename="e2e_seed_fall.mp4",
+            filename=clip_path.name,
             file_path=str(clip_path),
             duration_seconds=3.0,
             trigger_action="fall",

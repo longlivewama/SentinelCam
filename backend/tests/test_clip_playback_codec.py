@@ -42,7 +42,6 @@ extension matches the codec, that the returned path is the file actually
 written, that the row points at it, and that it is served with the right
 Content-Type.
 """
-import struct
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,6 +50,7 @@ import numpy as np
 import pytest
 
 from app.core.ranges import DEFAULT_MEDIA_TYPE, media_type_for
+from app.core.video_codec import mp4_sample_fourccs
 from app.models.recording import Recording
 from app.services.recording_engine import _CODEC_LADDER, open_writer
 
@@ -63,36 +63,6 @@ EXPECTED_EXTENSION = {"avc1": ".mp4", "vp09": ".webm", "VP80": ".webm", "mp4v": 
 
 def _frames(n=15, w=64, h=48):
     return [np.full((h, w, 3), (i * 17) % 255, dtype=np.uint8) for i in range(n)]
-
-
-def _mp4_stsd_fourccs(path: Path):
-    """The codec fourccs declared in an MP4's sample-description box.
-    Used instead of ffprobe, which is not installed in the image."""
-    data = path.read_bytes()
-
-    def walk(start, end):
-        off, found = start, []
-        while off + 8 <= end:
-            size = struct.unpack(">I", data[off:off + 4])[0]
-            typ = data[off + 4:off + 8].decode("latin-1", "replace")
-            if size == 0:
-                size = end - off
-            if size < 8:
-                break
-            body = off + 8
-            if typ == "stsd":
-                count = struct.unpack(">I", data[body + 4:body + 8])[0]
-                entry = body + 8
-                for _ in range(count):
-                    entry_size = struct.unpack(">I", data[entry:entry + 4])[0]
-                    found.append(data[entry + 4:entry + 8].decode("latin-1", "replace"))
-                    entry += entry_size
-            if typ in ("moov", "trak", "mdia", "minf", "stbl"):
-                found += walk(body, off + size)
-            off += size
-        return found
-
-    return walk(0, len(data))
 
 
 # --- the ladder itself -----------------------------------------------------
@@ -183,7 +153,7 @@ def test_an_mp4_result_is_never_silently_mp4v_when_something_better_opened(tmp_p
     if Path(written).suffix != ".mp4":
         pytest.skip(f"this environment encoded {codec} into {Path(written).suffix}")
 
-    fourccs = _mp4_stsd_fourccs(Path(written))
+    fourccs = mp4_sample_fourccs(written)
     assert fourccs, "no sample description found in the written MP4"
     if codec == "avc1":
         assert "avc1" in fourccs
