@@ -115,8 +115,11 @@ It re-encodes through the same ladder new recordings use, verifies the result
 decodes before repointing the row, and keeps each superseded original until you
 pass `--delete-originals`. Unplayable files that no recording row points at are
 reported — they cannot be served, so they are pure dead weight; `--delete-orphans`
-removes them, skipping anything written in the last hour, since a clip is on disk
-before its row exists and an orphan is indistinguishable from an encode in flight. In Docker, run it as
+removes them. Add `--include-playable-orphans` to widen that to unreferenced clips
+that still decode. Both skip anything written in the last hour, since a clip is on
+disk before its row exists and an orphan is indistinguishable from an encode in
+flight; `--orphan-min-age-minutes` narrows that window once you have confirmed no
+analysis is running. Files that are not recognisable video are never eligible. In Docker, run it as
 the uid the app runs as (`--user 10001:10001`) so the rewritten files stay
 manageable by the server.
 
