@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     JWT_EXPIRE_HOURS: int = 24
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # --- Media tokens ---
+    # Lifetime of the short-lived, single-resource credential the media
+    # endpoints accept in a query string (see core/deps.py's MediaAccess).
+    # A browser cannot put a header on `<video src>`, so *something* has to
+    # travel in the URL; this is what makes that something worth far less
+    # than the session JWT it replaced. Long enough that opening a page and
+    # then pressing play a few minutes later still works, short enough that
+    # a token recovered from a log or a proxy is almost always already dead
+    # - and even a live one only ever streams the one clip it names.
+    MEDIA_TOKEN_EXPIRE_SECONDS: int = 300
+
     # --- Auth rate limiting ---
     # Sensitive unauthenticated endpoints are rate-limited per client IP
     # (see core/rate_limit.py). The defaults below are the intended

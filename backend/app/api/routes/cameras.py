@@ -6,15 +6,26 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.deps import get_current_user, get_current_user_allowing_query_token, require_operator
+from app.core.deps import (
+    MEDIA_KIND_CAMERA,
+    MediaAccess,
+    get_current_user,
+    issue_media_token,
+    require_operator,
+)
 from app.database import get_db
 from app.models.camera import Camera
 from app.models.user import User
 from app.schemas.camera import CameraCreate, CameraOut, CameraUpdate
+from app.schemas.media import MediaTokenOut
 from app.services.stream_manager import stream_manager
 from app.services.detection.engine import detection_engine
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
+
+# The MJPEG stream is consumed by <img src>, which cannot send an
+# Authorization header - see core/deps.MediaAccess.
+_media_access = MediaAccess(MEDIA_KIND_CAMERA, "camera_id")
 
 
 def _sync_detection_state(camera: Camera):
@@ -92,12 +103,27 @@ def delete_camera(
     return None
 
 
+@router.post("/{camera_id}/media-token", response_model=MediaTokenOut)
+def create_camera_media_token(
+    camera_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mints a token that opens THIS camera's MJPEG stream and nothing
+    else. Applies the same active-camera check the stream endpoint
+    applies, so a token is never minted for a camera that could not be
+    watched anyway."""
+    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    if camera is None or not camera.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+    return issue_media_token(current_user, MEDIA_KIND_CAMERA, camera.id)
+
+
 @router.get("/{camera_id}/stream")
 def stream_camera(
     camera_id: int,
     db: Session = Depends(get_db),
-    # Reached by <img src>, which cannot send an Authorization header.
-    current_user: User = Depends(get_current_user_allowing_query_token),
+    current_user: User = Depends(_media_access),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None or not camera.is_active:

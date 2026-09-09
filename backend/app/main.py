@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.core import rate_limit
 from app.core.http_hardening import SecurityHeadersMiddleware, unhandled_exception_handler
+from app.core.logging_utils import install_log_redaction
 from app.database import Base, SessionLocal, engine
 import app.models  # noqa: F401 - ensures all models are registered on Base.metadata
 from app.models.camera import Camera
@@ -16,6 +17,12 @@ from app.services.realtime import realtime_broadcaster
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# At import time, not on startup: Uvicorn configures its loggers before it
+# imports the application, and the very first request can be served before
+# any startup hook has finished. Installing here means there is no window
+# in which an access line is written unredacted.
+install_log_redaction()
 
 app = FastAPI(title="SentinelCam", version="1.0.0")
 

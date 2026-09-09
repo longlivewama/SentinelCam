@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import VideoUpload from './VideoUpload'
 import apiClient from '../api/client'
+import { pageOf } from '../test/apiFixtures'
 import { useAuthStore } from '../store/authStore'
 import { useToastStore } from '../store/toastStore'
 
@@ -58,13 +59,40 @@ const EVENTS = [
   },
 ]
 
+// Media URLs no longer carry the session JWT. Each player asks the API
+// for a short-lived token scoped to its own clip, so the mock has to mint
+// one - and it returns a DIFFERENT token every time, which is what lets
+// the retry assertions below tell a refreshed player from a stale one.
+let mintCount = 0
+
 function mockDetailFetch({ events = EVENTS, recordings = RECORDINGS } = {}) {
+  mintCount = 0
   apiClient.get.mockImplementation((url) => {
-    if (url === '/api/video-uploads') return Promise.resolve({ data: [UPLOAD] })
-    if (url === '/api/recordings') return Promise.resolve({ data: recordings })
-    if (url === '/api/alerts') return Promise.resolve({ data: events })
+    if (url === '/api/video-uploads') return Promise.resolve({ data: pageOf([UPLOAD]) })
+    if (url === '/api/recordings') return Promise.resolve({ data: pageOf(recordings) })
+    if (url === '/api/alerts') return Promise.resolve({ data: pageOf(events) })
     return Promise.reject(new Error(`unexpected request: ${url}`))
   })
+  apiClient.post.mockImplementation((url) => {
+    if (url.endsWith('/media-token')) {
+      mintCount += 1
+      return Promise.resolve({ data: { token: `media-${mintCount}`, expires_in: 300 } })
+    }
+    return Promise.reject(new Error(`unexpected request: ${url}`))
+  })
+}
+
+/** Fails a player twice - the first failure is spent on a token refresh. */
+async function failPlayer(index) {
+  const at = () => document.querySelectorAll('video')[index]
+  const originalSrc = at().getAttribute('src')
+
+  fireEvent.error(at())
+  await waitFor(() => {
+    expect(at()?.getAttribute('src')).not.toBe(originalSrc)
+  })
+
+  fireEvent.error(at())
 }
 
 async function openDetail(user) {
@@ -146,7 +174,7 @@ describe('VideoUpload results screen', () => {
   it('reports a results-loading failure instead of claiming no falls were found', async () => {
     const user = userEvent.setup()
     apiClient.get.mockImplementation((url) => {
-      if (url === '/api/video-uploads') return Promise.resolve({ data: [UPLOAD] })
+      if (url === '/api/video-uploads') return Promise.resolve({ data: pageOf([UPLOAD]) })
       return Promise.reject(new Error('boom'))
     })
     await openDetail(user)
@@ -171,8 +199,7 @@ describe('VideoUpload results screen', () => {
     await openDetail(user)
 
     await screen.findByText(/at 0:12 in video/i)
-    const clip = document.querySelectorAll('video')[1]
-    fireEvent.error(clip)
+    await failPlayer(1)
 
     expect(await screen.findByText(/this video could not be played/i)).toBeInTheDocument()
     expect(screen.getByText(/cannot decode/i)).toBeInTheDocument()
@@ -184,7 +211,7 @@ describe('VideoUpload results screen', () => {
     await openDetail(user)
 
     await screen.findByText(/at 0:12 in video/i)
-    fireEvent.error(document.querySelector('video'))
+    await failPlayer(0)
 
     expect(await screen.findByText(/this video could not be played/i)).toBeInTheDocument()
   })
@@ -196,7 +223,7 @@ describe('VideoUpload results screen', () => {
 
     await screen.findByText(/at 0:12 in video/i)
     const before = document.querySelectorAll('video').length
-    fireEvent.error(document.querySelectorAll('video')[1])
+    await failPlayer(1)
 
     await screen.findByText(/this video could not be played/i)
     // Exactly one player was replaced by the message; the rest still render.
@@ -226,22 +253,58 @@ describe('VideoUpload results screen', () => {
     const recordingsCall = calls.find(([url]) => url === '/api/recordings')
     const alertsCall = calls.find(([url]) => url === '/api/alerts')
 
-    expect(recordingsCall[1].params).toEqual({ video_upload_id: 7 })
-    expect(alertsCall[1].params).toEqual({ video_upload_id: 7, event_type: 'fall' })
+    // One generous page rather than paging: these are one upload's own
+    // results, and a video with 100+ detected falls is a footage problem,
+    // not a browsing one.
+    expect(recordingsCall[1].params).toEqual({ video_upload_id: 7, page_size: 100 })
+    expect(alertsCall[1].params).toEqual({ video_upload_id: 7, page_size: 100, event_type: 'fall' })
   })
 
-  it('points each player at the right clip, carrying the auth token', async () => {
+  it('points each player at the right clip', async () => {
     const user = userEvent.setup()
     mockDetailFetch()
     await openDetail(user)
 
     await screen.findByText(/at 0:12 in video/i)
+    await waitFor(() => expect(document.querySelectorAll('video')).toHaveLength(3))
     const sources = [...document.querySelectorAll('video')].map((v) => v.getAttribute('src'))
 
-    expect(sources[0]).toBe('http://localhost:8000/api/video-uploads/7/video?token=tok')
+    expect(sources[0]).toMatch(/^http:\/\/localhost:8000\/api\/video-uploads\/7\/video\?token=/)
     // Falls render in footage order: recording 12 (0:12) before 11 (4:05).
-    expect(sources[1]).toBe('http://localhost:8000/api/recordings/12/video?token=tok')
-    expect(sources[2]).toBe('http://localhost:8000/api/recordings/11/video?token=tok')
+    expect(sources[1]).toMatch(/^http:\/\/localhost:8000\/api\/recordings\/12\/video\?token=/)
+    expect(sources[2]).toMatch(/^http:\/\/localhost:8000\/api\/recordings\/11\/video\?token=/)
+  })
+
+  it('never puts the session token in a media URL', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    await waitFor(() => expect(document.querySelectorAll('video')).toHaveLength(3))
+    const sources = [...document.querySelectorAll('video')].map((v) => v.getAttribute('src'))
+
+    // 'tok' is the session JWT this component used to publish into every
+    // player's src, and from there into the access log of every proxy on
+    // the path. Each player now carries its own scoped, minutes-long token.
+    for (const src of sources) {
+      expect(src).not.toContain('token=tok')
+    }
+    expect(new Set(sources.map((s) => new URL(s).searchParams.get('token'))).size).toBe(3)
+  })
+
+  it('asks for a token scoped to each resource, not one token for everything', async () => {
+    const user = userEvent.setup()
+    mockDetailFetch()
+    await openDetail(user)
+
+    await screen.findByText(/at 0:12 in video/i)
+    await waitFor(() => expect(document.querySelectorAll('video')).toHaveLength(3))
+
+    const minted = apiClient.post.mock.calls.map(([url]) => url)
+    expect(minted).toContain('/api/video-uploads/7/media-token')
+    expect(minted).toContain('/api/recordings/11/media-token')
+    expect(minted).toContain('/api/recordings/12/media-token')
   })
 
   it('says no falls were detected when a completed upload genuinely has none', async () => {
