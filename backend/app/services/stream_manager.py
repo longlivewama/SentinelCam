@@ -24,6 +24,7 @@ from typing import Optional
 import cv2
 
 from app.config import settings
+from app.core.camera_url import redact_credentials
 from app.database import SessionLocal
 from app.models.camera import Camera
 from app.services.realtime import realtime_broadcaster
@@ -117,9 +118,14 @@ class CameraStream:
             cap = cv2.VideoCapture(source)
             if not cap.isOpened():
                 self._consecutive_failures += 1
+                # An IP camera URL carries its credentials inline, and this
+                # line fires for every unreachable or misconfigured camera -
+                # i.e. routinely, and into whatever aggregator the logs are
+                # shipped to. The host and path are what make it useful for
+                # debugging; the userinfo is the camera's password.
                 logger.warning(
                     "Camera %s: failed to open source %r (attempt %d)",
-                    self.camera_id, source, self._consecutive_failures,
+                    self.camera_id, redact_credentials(source), self._consecutive_failures,
                 )
                 if self._consecutive_failures >= 3:
                     self._set_status("error")
