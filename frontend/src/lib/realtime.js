@@ -10,6 +10,26 @@ let reconnectAttempt = 0
 let reconnectTimer = null
 const listeners = new Set()
 
+// The backend distinguishes an authentication failure from a network drop
+// by close code, specifically so this client can stop retrying a
+// credential it now knows is dead (see backend/app/api/routes/realtime.py).
+//
+// 4403 is the one that matters in a browser: the socket was accepted and
+// then closed at the token's own `exp`, so the code arrives on a live
+// connection. Without this branch the client reconnected on a backoff with
+// a token it had just been told was expired - forever, for as long as the
+// tab stayed open - while the UI went on looking signed in. The session is
+// genuinely over at that point, so end it the way any other expiry ends:
+// drop the credential and let the route guards send the user to /login.
+//
+// 4401 is sent when the handshake itself is rejected. A browser generally
+// sees that as a failed connection (1006) rather than the code, because
+// the close happens before the upgrade completes - it is handled here for
+// correctness, not because it is the common path. A 1006 is deliberately
+// left to reconnect: it is indistinguishable from a network drop.
+const WS_UNAUTHORIZED = 4401
+const WS_TOKEN_EXPIRED = 4403
+
 function wsUrl(token) {
   const url = new URL(API_URL)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -53,9 +73,18 @@ export function connectRealtime() {
     })
   }
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     useRealtimeStatus.setState({ connected: false })
     if (intentionalClose) return
+
+    if (event?.code === WS_UNAUTHORIZED || event?.code === WS_TOKEN_EXPIRED) {
+      socket = null
+      if (event.code === WS_TOKEN_EXPIRED) {
+        useAuthStore.getState().logout()
+      }
+      return
+    }
+
     reconnectAttempt += 1
     const delay = Math.min(1000 * 2 ** reconnectAttempt, 30000)
     reconnectTimer = setTimeout(connectRealtime, delay)
