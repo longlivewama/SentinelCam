@@ -24,7 +24,20 @@ logger = logging.getLogger(__name__)
 # in which an access line is written unredacted.
 install_log_redaction()
 
-app = FastAPI(title="SentinelCam", version="1.0.0")
+# The interactive docs enumerate every route, parameter and schema in the
+# application. That is exactly what you want while developing and exactly
+# what you do not want to publish from a production deployment, where it
+# hands an unauthenticated visitor a complete map of the attack surface
+# for free. Dev and test keep /docs, /redoc and /openapi.json unchanged.
+_DOCS_ENABLED = settings.ENVIRONMENT != "production"
+
+app = FastAPI(
+    title="SentinelCam",
+    version="1.0.0",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 # Never "*": credentials are allowed on these requests, and the browser
 # refuses that combination anyway. CORS_ORIGINS is an explicit list.
