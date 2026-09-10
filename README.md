@@ -98,6 +98,7 @@ production detector running, not a separate demo path.
 | Pose-based fall detection with a sustained-posture gate | ✅ |
 | Additional heuristic detectors: violence, crowd density, abandoned object | ✅ (heuristics — see [notes](#engineering-notes--design-decisions)) |
 | Automatic clip recording with a ~3 s pre-event rolling buffer | ✅ |
+| Person tracking + bounding-box annotation on fall clips from uploaded video | ✅ (uploads only — see [notes](#known-limitations)) |
 | Snapshot capture attached to every event | ✅ |
 | Offline video upload with drag-and-drop, client-side validation and progress tracking | ✅ |
 | Server-side analysis of uploaded video through the same detector | ✅ |
@@ -572,6 +573,36 @@ Inference costs ~120 ms per 640 px frame on CPU. For live cameras this is a *thi
 processed frame alongside pose and object detection — budget for it, or raise
 `DETECTION_FRAME_STRIDE`.
 
+### Clip annotation (uploads)
+
+A fall clip written by the upload analyser carries a box over the person the fall belongs to. This
+sits strictly *downstream* of everything above — it cannot create, suppress, retime or re-score a
+fall — and it adds no inference, because it consumes the pose boxes and `Fall` boxes the pipeline
+has already produced for each processed frame.
+
+```
+processed frame ─▶ PersonTracker           pose boxes  → temporary track ids
+                ─▶ PersonTracker           Fall boxes  → fall regions
+fall event      ─▶ associate()             containment + IoU + centre + continuity
+                ─▶ AnnotationPlan          the subject's boxes across the clip window
+clip write      ─▶ BoxTimeline             interpolated between real observations only
+                ─▶ FALL DETECTED / ID n | 0.74
+```
+
+Three properties are deliberate:
+
+- **The box moves.** Inference runs every `VIDEO_ANALYSIS_FRAME_STRIDE`-th frame, so a clip has a
+  real observation ~6 times a second; frames in between are interpolated between two real
+  sightings. Outside the observed span, or across a gap longer than 0.75 s, nothing is drawn.
+- **Association can refuse.** With several people on screen only the one who fell is boxed, and a
+  candidate that is merely near the fall — or an even split between two of them — yields no track
+  id at all. The clip then shows the detector's own region as a dashed box marked `UNMATCHED`.
+- **Track ids are object-tracking handles, nothing more.** They live for a few seconds inside one
+  analysis, are never persisted, and are never compared across videos. No face or identity
+  recognition of any kind is involved.
+
+`backend/app/services/detection/{person_tracker,track_fall_association,annotated_clip_renderer,fall_annotation}.py`.
+
 ### The earlier keypoint classifier (secondary, disabled by default)
 
 `ml/exported/fall_classifier_v1.onnx` is a 10-feature keypoint MLP from an earlier iteration. It is
@@ -773,18 +804,26 @@ Stated plainly, because they matter when reading the rest of this document:
    in them.
 5. **Violence, crowd and abandoned-object detectors are heuristics**, not trained models — a known
    and documented scope boundary, not an accidental gap.
-6. **The earlier keypoint classifier's metrics are optimistic** — small, narrow, largely
+6. **Clip annotation covers uploaded video only; live-camera clips are unannotated.** The upload
+   analyser decodes a file with a frame index it can attach observations to, while a camera clip is
+   assembled from a rolling buffer that another thread fills at a different cadence with no
+   per-frame identity. Annotating those would mean threading frame ids through `stream_manager`,
+   which is a change to the realtime capture path rather than to this feature. The annotation layer
+   is also only as good as the detector under it: on footage where the model raises a false alert
+   (see limitation 1), the honest result is a dashed `UNMATCHED` region, and where the pose model
+   never sees the subject at all — a person lying still in the dark — no track id can be offered.
+7. **The earlier keypoint classifier's metrics are optimistic** — small, narrow, largely
    synthetic dataset; see [`ml/README.md`](ml/README.md). It is off by default and is not the
    production detector.
-7. **Single-process assumptions.** The in-memory rate limiter and realtime broadcaster are
+8. **Single-process assumptions.** The in-memory rate limiter and realtime broadcaster are
    per-process; multi-worker deployment needs a shared backing store.
-8. **E2E coverage boundaries.** The Playwright suite does not cover live-camera streaming (no
+9. **E2E coverage boundaries.** The Playwright suite does not cover live-camera streaming (no
    camera hardware in CI) or a genuine ML-detected fall — its upload fixture is deliberately
    person-free so the assertion stays honest. Both were verified manually in a real browser.
-9. **Two residual dependency advisories are accepted rather than force-fixed:** `ecdsa` (reachable
+10. **Two residual dependency advisories are accepted rather than force-fixed:** `ecdsa` (reachable
    only via ECDSA JWT algorithms; this app uses HS256 exclusively) and `pyasn1` (pinned by
    `python-jose`'s own constraint). Both are documented rather than hidden.
-10. **Untested externally:** a real RTSP IP camera (verified against a USB webcam instead), and
+11. **Untested externally:** a real RTSP IP camera (verified against a USB webcam instead), and
    real SMTP delivery (verified against Mailpit).
 
 ---

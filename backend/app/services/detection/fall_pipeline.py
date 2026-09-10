@@ -76,6 +76,14 @@ class FallPipeline:
             if self.mode in (MODE_MODEL, MODE_HYBRID)
             else None
         )
+        # Every `Fall` box the trained detector produced on the most
+        # recent update(), whether or not it fired an event. Published
+        # for the clip annotation layer (detection/fall_annotation.py),
+        # which needs the detector's per-frame regions and must not pay
+        # for a second inference pass to get them. Empty in heuristic
+        # mode, where there is no such model. Read-only for callers -
+        # nothing here feeds back into a detection decision.
+        self.last_fall_boxes: tuple = ()
 
     @property
     def uses_trained_model(self) -> bool:
@@ -91,9 +99,11 @@ class FallPipeline:
         "heuristic") identifying which strategy fired it, so the alert
         that reaches the operator says what actually made the call."""
         events: List[dict] = []
+        self.last_fall_boxes = ()
 
         if self._model_gate is not None:
             detections = fall_object_detector.detect(frame)
+            self.last_fall_boxes = tuple(detections)
             events.extend(self._model_gate.update(detections, now=now))
 
         if self._heuristic is not None:

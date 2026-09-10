@@ -40,7 +40,9 @@ from app.models.video_upload import (
     VideoUpload,
 )
 from app.services.cascade_delete import remove_upload_clip_dir, stage_delete_video_upload
+from app.services.detection.annotated_clip_renderer import iter_annotated_frames
 from app.services.detection.engine import detection_engine
+from app.services.detection.fall_annotation import FallClipAnnotator
 from app.services.detection.fall_pipeline import FallPipeline
 from app.services.detection.video_scan import open_video, scan_video
 from app.services.notifications import notification_service
@@ -279,8 +281,20 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
         "Video upload %s: analysing %d frames at %.2f fps, fall detection mode=%r",
         video_upload_id, frame_count, fps, fall_pipeline.mode,
     )
+    # Purely an annotation layer over the events the pipeline above
+    # decided on: it tracks the people the pose model already found and
+    # the regions the fall detector already produced, so each clip can be
+    # drawn with a box over the subject the fall belongs to. It runs no
+    # model and cannot create, suppress or retime a fall event.
+    annotator = FallClipAnnotator(
+        fps=fps,
+        stride=settings.VIDEO_ANALYSIS_FRAME_STRIDE,
+        pre_event_seconds=PRE_EVENT_SECONDS,
+        post_event_seconds=POST_EVENT_SECONDS,
+    )
     raw_buffer = deque(maxlen=int(PRE_EVENT_SECONDS * fps) or 1)
-    pending_clips = []  # list of dicts: {"remaining": int, "frames": list, "event": dict}
+    # list of dicts: {"remaining", "frames", "first_index", "event", "annotation"}
+    pending_clips = []
 
     max_concurrent_persons = 0
     fall_events = []  # list of {"timestamp_seconds", "confidence"}
@@ -299,13 +313,30 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
         frame = scanned.frame
         raw_buffer.append(frame)
 
+        # Before the pending-clip pass below, not after: a clip whose
+        # post-event buffer completes on THIS frame is written during
+        # that pass, and its annotation has to already know where the
+        # subject is on this frame or the clip's last few frames lose
+        # their box.
+        if scanned.processed:
+            annotator.observe(
+                scanned.index,
+                scanned.video_time_seconds,
+                scanned.people,
+                fall_pipeline.last_fall_boxes,
+            )
+
         # Advance any clips currently collecting post-event frames.
         still_pending = []
         for clip in pending_clips:
             clip["frames"].append(frame.copy())
             clip["remaining"] -= 1
             if clip["remaining"] <= 0:
-                if not _write_upload_clip(video_upload_id, clip["frames"], fps, clip["event"]):
+                annotator.release(clip["annotation"])
+                if not _write_upload_clip(
+                    video_upload_id, clip["frames"], fps, clip["event"],
+                    annotation=clip["annotation"], first_frame_index=clip["first_index"],
+                ):
                     # The upload was deleted between the fall firing and
                     # this clip finishing its post-event buffer - the
                     # write was discarded rather than persisted. Nothing
@@ -330,11 +361,20 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
                 pending_clips.append({
                     "remaining": int(POST_EVENT_SECONDS * fps) or 1,
                     "frames": list(raw_buffer),
+                    # Index of frames[0] on the video's own frame
+                    # timeline. The buffer holds every decoded frame, so
+                    # clip frame i is video frame first_index + i - which
+                    # is what lets the annotation follow the subject
+                    # rather than sit still for the whole clip.
+                    "first_index": scanned.index - len(raw_buffer) + 1,
                     "event": {
                         "timestamp_seconds": scanned.video_time_seconds,
                         "confidence": confidence,
                         "detector": detector,
                     },
+                    "annotation": annotator.plan_for_event(
+                        fall_event, scanned.index, scanned.video_time_seconds,
+                    ),
                 })
 
         frame_index = scanned.index + 1
@@ -349,7 +389,11 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
     # be encoded and then discarded by _write_upload_clip's own check.
     if not cancelled:
         for clip in pending_clips:
-            if not _write_upload_clip(video_upload_id, clip["frames"], fps, clip["event"]):
+            annotator.release(clip["annotation"])
+            if not _write_upload_clip(
+                video_upload_id, clip["frames"], fps, clip["event"],
+                annotation=clip["annotation"], first_frame_index=clip["first_index"],
+            ):
                 cancelled = True
 
     cap.release()
@@ -388,7 +432,41 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
     return True
 
 
-def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: dict) -> bool:
+def _clip_frames(frames: list, first_frame_index: int, annotation):
+    """The frames to encode: annotated where there is a plan with boxes to
+    draw, and the untouched originals otherwise.
+
+    Annotation is strictly best-effort. Anything that goes wrong building
+    the timeline costs this clip its boxes and nothing else - the same
+    clip, of the same footage, is still written and still persisted."""
+    if annotation is None:
+        return frames
+    try:
+        timeline = annotation.timeline()
+        if len(timeline) == 0:
+            return frames
+        return iter_annotated_frames(frames, first_frame_index, timeline, annotation.label)
+    except Exception:
+        logger.exception("Could not build the fall annotation for this clip; writing it unannotated")
+        return frames
+
+
+def _annotation_summary(annotation) -> str:
+    if annotation is None:
+        return "none"
+    if annotation.track_id is None:
+        return f"unmatched({len(annotation.observations)} obs)"
+    return f"track {annotation.track_id} ({len(annotation.observations)} obs)"
+
+
+def _write_upload_clip(
+    video_upload_id: int,
+    frames: list,
+    fps: float,
+    event: dict,
+    annotation=None,
+    first_frame_index: int = 0,
+) -> bool:
     """Encodes one fall's pre/post-event buffer to disk and records it as
     a Recording + Event. Returns False, having written nothing to the
     database, if the upload was deleted or flagged for deletion - the
@@ -398,6 +476,13 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
     check below, a fall detected after the user deleted the upload would
     try to INSERT a Recording/Event whose video_upload_id no longer
     existed, raising an IntegrityError from inside the analysis thread.
+
+    `annotation`, when given, is the FallClipAnnotator plan for this fall
+    (see detection/fall_annotation.py) and `first_frame_index` is the
+    video-frame index of frames[0]. They only change what is drawn INSIDE
+    the frames: the clip's boundaries, frame count, fps, codec, container,
+    Recording/Event rows, alert and notification are all identical with or
+    without them.
     """
     if not frames:
         return True
@@ -433,7 +518,16 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
     file_path = Path(written_path)
     filename = file_path.name
 
-    for frame in frames:
+    # Frames go through the annotation layer one at a time rather than
+    # being annotated as a batch: a clip is a few hundred full-resolution
+    # frames, and holding a second annotated copy of all of them would
+    # double this worker's peak memory for no reason.
+    mid_index = min(len(frames) // 2, len(frames) - 1)
+    mid_frame = frames[mid_index]
+    frame_source = _clip_frames(frames, first_frame_index, annotation)
+    for index, frame in enumerate(frame_source):
+        if index == mid_index:
+            mid_frame = frame
         writer.write(frame)
     writer.release()
 
@@ -444,12 +538,12 @@ def _write_upload_clip(video_upload_id: int, frames: list, fps: float, event: di
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     snapshot_filename = f"upload{video_upload_id}_{ts_str}_fall.jpg"
     snapshot_path = snapshot_dir / snapshot_filename
-    mid_frame = frames[min(len(frames) // 2, len(frames) - 1)]
     cv2.imwrite(str(snapshot_path), mid_frame)
 
     logger.info(
-        "Video upload %s: wrote event clip %s (codec=%s, frames=%d) at t=%.2fs",
-        video_upload_id, file_path, codec_used, len(frames), event["timestamp_seconds"],
+        "Video upload %s: wrote event clip %s (codec=%s, frames=%d, annotation=%s) at t=%.2fs",
+        video_upload_id, file_path, codec_used, len(frames),
+        _annotation_summary(annotation), event["timestamp_seconds"],
     )
 
     with SessionLocal() as db:

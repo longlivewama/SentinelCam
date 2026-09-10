@@ -211,6 +211,11 @@ class FallDetector:
                     "track_id": track_id,
                     "confidence": confidence,
                     "sustained_seconds": round(sustained_seconds, 2),
+                    # The box this event was decided on. Carried purely so
+                    # the annotation layer (detection/fall_annotation.py)
+                    # can draw the clip's box over the right subject; it
+                    # is read by nothing that decides anything.
+                    "bbox": tuple(float(v) for v in person.bbox),
                     **({"classifier_score": round(classifier_score, 3)} if classifier_score is not None else {}),
                 })
 
@@ -349,6 +354,9 @@ class ModelFallDetector:
                     "confidence": round(track.peak_confidence, 2),
                     "sustained_seconds": round(sustained_seconds, 2),
                     "detector": "model",
+                    # The box this event was decided on - see the same key
+                    # in FallDetector.update above. Annotation only.
+                    "bbox": tuple(float(v) for v in detection.bbox),
                 })
 
         # A track the model stopped seeing has to restart its sustain
