@@ -89,7 +89,20 @@ Documented so you know what exists — not as a claim that the implementation is
   string included. `backend/app/core/logging_utils.py` installs a log-record factory plus filters
   on Uvicorn's own loggers, so `token=…` and `Bearer …` are replaced with `[REDACTED]` in every
   record in the process — regardless of which library emitted it — while leaving the path and the
-  rest of the query string intact for debugging.
+  rest of the query string intact for debugging. The same filter strips the inline userinfo of a
+  stream URL (`rtsp://admin:…@host/…` → `rtsp://***:***@host/…`), so a camera's password cannot
+  reach a log file even from a call site that does not know it is holding one.
+- **Camera credentials and camera sources.** An IP camera is addressed with its credentials
+  inline (`rtsp://admin:…@host/…`), so a camera's `url` *is* its password. Cameras are shared
+  infrastructure — every authenticated user may list them and watch their streams — but the URL is
+  masked for anyone below `operator`, so a `viewer` cannot read the credentials out of the API and
+  connect to the hardware directly. Operators and admins still receive the real value, because they
+  are the roles that may edit a camera and the edit form round-trips it. Separately, a camera `url`
+  must be a stream URL whose scheme is one a camera actually speaks (`rtsp`, `rtsps`, `rtmp`,
+  `rtmps`, `http`, `https`, `udp`, `rtp`) or a USB device index: OpenCV hands the string to FFmpeg,
+  which otherwise treats `file:`, `concat:`, a bare path and friends as things to open on the
+  server's behalf. Private and loopback addresses are deliberately still allowed — IP cameras live
+  on private LANs, and narrowing the protocol removes the capability without breaking the product.
 - **WebSocket authorization.** Delivery is scoped per subscriber using that same rule, so the
   realtime channel cannot hand a client data the REST API would refuse it. The connection also
   closes itself when the token it was opened with expires, since a long-lived socket cannot
@@ -106,7 +119,15 @@ Documented so you know what exists — not as a claim that the implementation is
 - **Security headers.** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
   `Referrer-Policy: no-referrer` (the stream and video endpoints carry a scoped media token in
   the URL)
-  and a restrictive `Permissions-Policy` on every response.
+  and a restrictive `Permissions-Policy` on every response. The SPA's own nginx
+  (`frontend/nginx.conf`) sets the same four plus a `Content-Security-Policy` whose working part is
+  `script-src 'self'` — that origin is the one holding the session token, so an injected script
+  there is an account takeover. The media/connect directives stay wide because the API origin is
+  chosen at build time (`VITE_API_URL`) and this file cannot name it; narrow them if you template
+  the config per deployment.
+- **Interactive docs.** `/docs`, `/redoc` and `/openapi.json` are served in development and test
+  and are **not mounted** when `ENVIRONMENT=production`, where they would hand an unauthenticated
+  visitor a complete map of the API surface.
 - **Upload validation.** Server-side extension, size and **container-signature** checks — a file
   is verified to actually be one of the accepted video containers, not merely named like one —
   plus a per-user storage quota, a generated on-disk filename (the client's is never used as a
