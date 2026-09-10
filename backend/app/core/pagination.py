@@ -69,6 +69,22 @@ DEFAULT_PAGE_SIZE = 20
 # letting a single response get large.
 MAX_PAGE_SIZE = 100
 
+# `page` needs an upper bound too, and for a blunter reason than
+# `page_size`: OFFSET is a bigint in Postgres, `page` had no ceiling, and
+# `(page - 1) * page_size` for a page in the 10**19 range therefore
+# produced an offset the database could not represent. Postgres answered
+# with `NumericValueOutOfRange`, which nothing caught, so
+# `?page=99999999999999999999` turned every paginated listing
+# (recordings, alerts, video-uploads) into an unhandled 500 for any
+# authenticated caller.
+#
+# A ceiling is the right shape of fix rather than clamping the offset: a
+# page past the end is already answered with an empty page, so a caller
+# asking for page 10**19 has made a mistake either way, and 422 says so.
+# 10**6 addresses 100 million rows at MAX_PAGE_SIZE - beyond anything this
+# application can accumulate - while keeping the computed offset small.
+MAX_PAGE = 1_000_000
+
 
 class PageParams:
     """`?page=&page_size=`, validated by FastAPI.
@@ -76,11 +92,15 @@ class PageParams:
     `ge=1` on both means page 0, a negative page and an oversized
     page_size are all rejected as 422 by the framework, before any query
     runs - rather than being silently clamped, which would answer a
-    different question from the one asked."""
+    different question from the one asked. `le` does the same job at the
+    top of each range."""
 
     def __init__(
         self,
-        page: int = Query(default=1, ge=1, description="1-based page number"),
+        page: int = Query(
+            default=1, ge=1, le=MAX_PAGE,
+            description=f"1-based page number (max {MAX_PAGE})",
+        ),
         page_size: int = Query(
             default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE,
             description=f"Rows per page (max {MAX_PAGE_SIZE})",

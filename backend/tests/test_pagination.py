@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.core.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from app.core.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE, MAX_PAGE_SIZE
 from app.models.camera import Camera
 from app.models.event import Event
 from app.models.recording import Recording
@@ -155,6 +155,7 @@ def test_an_empty_collection_reports_no_pages(client, viewer_headers):
     {"page_size": -5},
     {"page_size": MAX_PAGE_SIZE + 1},
     {"page_size": "lots"},
+    {"page": MAX_PAGE + 1},
 ])
 def test_invalid_paging_is_rejected_not_clamped(client, viewer_headers, path, params):
     """422 rather than a silent clamp: answering a different question from
@@ -163,12 +164,40 @@ def test_invalid_paging_is_rejected_not_clamped(client, viewer_headers, path, pa
     assert client.get(path, params=params, headers=viewer_headers).status_code == 422
 
 
+@pytest.mark.parametrize("path", ["/api/alerts", "/api/recordings", "/api/video-uploads"])
+@pytest.mark.parametrize("page_number", [
+    10 ** 20,      # what a fuzzer sends
+    2 ** 63,       # one past a signed 64-bit maximum
+    2 ** 62,       # in range for bigint, but not once multiplied by page_size
+])
+def test_an_absurd_page_number_is_refused_rather_than_crashing(
+    client, viewer_headers, path, page_number,
+):
+    """`page` had a floor but no ceiling, so `(page - 1) * page_size`
+    became an OFFSET Postgres could not represent: it raised
+    NumericValueOutOfRange, nothing caught it, and every paginated listing
+    answered a one-parameter request with an unhandled 500. Any
+    authenticated caller could do it to any of these three endpoints."""
+    response = client.get(path, params={"page": page_number}, headers=viewer_headers)
+
+    assert response.status_code == 422
+
+
 def test_the_maximum_page_size_is_accepted(client, viewer_headers, alerts):
     body = page(client, "/api/alerts", viewer_headers, page_size=MAX_PAGE_SIZE)
 
     assert body["page_size"] == MAX_PAGE_SIZE
     assert len(body["items"]) == TOTAL_ROWS
     assert body["pages"] == 1
+
+
+def test_the_maximum_page_number_is_accepted_and_reads_as_empty(client, viewer_headers, alerts):
+    """The ceiling has to sit well above anything real, so the boundary
+    itself must still be a valid (if empty) page rather than an error."""
+    body = page(client, "/api/alerts", viewer_headers, page=MAX_PAGE)
+
+    assert body["items"] == []
+    assert body["total"] == TOTAL_ROWS
 
 
 # --- ordering -------------------------------------------------------------
