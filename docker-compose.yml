@@ -11,7 +11,15 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinelcam}
       POSTGRES_DB: sentinelcam
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bound to loopback, not 0.0.0.0. Publishing a port in compose
+      # otherwise reaches every interface on the host - which put a
+      # Postgres holding recordings, users and password-reset tokens (with
+      # a default password, on a default port) on whatever network the host
+      # is attached to. Nothing outside this machine needs to reach the
+      # database: the backend talks to it over the compose network, which
+      # this does not affect, and a developer's `psql localhost` still
+      # works unchanged.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,8 +36,11 @@ services:
     image: axllent/mailpit:latest
     restart: unless-stopped
     ports:
-      - "${MAILPIT_SMTP_PORT:-1025}:1025"
-      - "${MAILPIT_WEB_PORT:-8025}:8025"
+      # Loopback for the same reason as postgres, and one more: this
+      # mailbox holds real password-reset links for every account in the
+      # stack, and its web UI has no authentication at all.
+      - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_WEB_PORT:-8025}:8025"
     healthcheck:
       # Mailpit's own liveness endpoint. Without this the backend could
       # start before the SMTP listener was accepting connections, and the
