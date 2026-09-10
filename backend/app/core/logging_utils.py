@@ -24,12 +24,19 @@ core/security.py), which is the real fix - but a credential that is merely
 weak still should not be written down, log files outlive the tokens in
 them, and the WebSocket handshake URL carries a session token that this
 same filter catches. Redaction is the belt to that fix's braces.
+
+The same filter also strips the inline userinfo of a stream URL, because
+an IP camera's credentials live there (`rtsp://admin:hunter2@host/...`)
+and a log file is the last place they should end up. See
+core/camera_url.py.
 """
 from __future__ import annotations
 
 import logging
 import re
 from typing import Any, Optional
+
+from app.core.camera_url import redact_credentials
 
 
 def redact_email(email: Optional[str]) -> str:
@@ -79,8 +86,21 @@ def redact_tokens(text: str) -> str:
     return _BEARER_RE.sub(rf"\1{REDACTED}", _QUERY_TOKEN_RE.sub(rf"\1{REDACTED}", text))
 
 
+def redact_sensitive(text: str) -> str:
+    """Every credential class this process knows how to recognise in a log
+    line: bearer/query tokens, and the inline userinfo of a stream URL.
+
+    The camera case is the same argument as the token case, one layer
+    down. An IP camera's URL carries its password
+    (`rtsp://admin:hunter2@host/...`), the capture loop already redacts it
+    at the one site that logs it deliberately, and this is the backstop for
+    every site that does not know it is holding one - an exception message
+    from FFmpeg, a repr in a traceback, a future log line."""
+    return redact_credentials(redact_tokens(text))
+
+
 def _redact_value(value: Any) -> Any:
-    return redact_tokens(value) if isinstance(value, str) else value
+    return redact_sensitive(value) if isinstance(value, str) else value
 
 
 def _redact_record(record: logging.LogRecord) -> None:
@@ -96,7 +116,7 @@ def _redact_record(record: logging.LogRecord) -> None:
     a source of exceptions."""
     try:
         if isinstance(record.msg, str):
-            record.msg = redact_tokens(record.msg)
+            record.msg = redact_sensitive(record.msg)
         if isinstance(record.args, tuple):
             record.args = tuple(_redact_value(a) for a in record.args)
         elif isinstance(record.args, dict):
@@ -114,7 +134,7 @@ def _redact_record(record: logging.LogRecord) -> None:
         # only happens for the records that would otherwise leak.
         if record.args:
             rendered = record.getMessage()
-            redacted = redact_tokens(rendered)
+            redacted = redact_sensitive(rendered)
             if redacted != rendered:
                 record.msg = redacted
                 record.args = None

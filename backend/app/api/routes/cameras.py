@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.core.camera_url import redact_credentials
 from app.core.deps import (
     MEDIA_KIND_CAMERA,
     MediaAccess,
@@ -37,9 +38,32 @@ def _sync_detection_state(camera: Camera):
         detection_engine.stop(camera.id)
 
 
+def _visible_camera(camera: Camera, user: User) -> CameraOut:
+    """The camera as `user` is allowed to see it.
+
+    Cameras are shared infrastructure - every authenticated user may list
+    them and watch their streams - but an IP camera's `url` carries its
+    credentials inline (`rtsp://admin:hunter2@host/...`), and that is the
+    camera's password, not a description of it. Handing it to a `viewer`
+    gave the least-privileged account in the deployment direct RTSP access
+    to the hardware, outside this application and outside every check it
+    makes; the same credentials usually open the camera's own admin web UI
+    too.
+
+    Operators and admins keep the real value: they are the roles that may
+    create and update cameras, the edit form is populated from this
+    response, and masking it for them would overwrite a working camera's
+    configuration with a redaction on the next save."""
+    out = CameraOut.model_validate(camera)
+    if not user.is_operator:
+        out.url = redact_credentials(camera.url)
+    return out
+
+
 @router.get("", response_model=List[CameraOut])
 def list_cameras(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    return db.query(Camera).filter(Camera.is_active == True).all()  # noqa: E712
+    cameras = db.query(Camera).filter(Camera.is_active == True).all()  # noqa: E712
+    return [_visible_camera(camera, current_user) for camera in cameras]
 
 
 @router.post("", response_model=CameraOut, status_code=status.HTTP_201_CREATED)
@@ -61,7 +85,7 @@ def get_camera(camera_id: int, db: Session = Depends(get_db), current_user: User
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
-    return camera
+    return _visible_camera(camera, current_user)
 
 
 @router.put("/{camera_id}", response_model=CameraOut)
