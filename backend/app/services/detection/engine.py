@@ -10,11 +10,11 @@ background daemon thread:
     DETECTION_FRAME_STRIDE-th frame - running full detection on every
     single frame is unnecessary and expensive on CPU; this is a tunable),
   - runs the shared pose model once (feeds both fall + violence
-    detection) and the shared object model once (feeds both crowd +
-    abandoned-object detection) per processed frame - plus, when the
-    trained fall detector is enabled (see detection/fall_pipeline.py), a
-    third shared model that produces the fall signal directly,
-  - feeds the results to each of the four detector modules,
+    detection) and the shared object model once (feeds crowd detection)
+    per processed frame - plus, when the trained fall detector is
+    enabled (see detection/fall_pipeline.py), a third shared model that
+    produces the fall signal directly,
+  - feeds the results to each of the three detector modules,
   - and calls recording_engine.trigger_event(...) whenever a detector
     fires, which takes care of writing the clip, persisting the Recording
     + Event rows, and sending the alert email.
@@ -41,7 +41,6 @@ from app.services.stream_manager import stream_manager
 from app.services.detection.fall_pipeline import FallPipeline
 from app.services.detection.violence_detection import ViolenceDetector
 from app.services.detection.crowd_detection import CrowdDetector
-from app.services.detection.abandoned_object_detection import AbandonedObjectDetector
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +115,6 @@ class DetectionEngine:
         logger.info("Camera %s: fall detection running in %r mode", camera_id, fall_pipeline.mode)
         violence_detector = ViolenceDetector()
         crowd_detector = CrowdDetector()
-        abandoned_detector = AbandonedObjectDetector()
 
         frame_index = 0
         poll_interval = 1.0 / max(settings.STREAM_FPS, 1)
@@ -128,7 +126,6 @@ class DetectionEngine:
                     logger.info("Camera %s detection disabled/removed; stopping detection loop", camera_id)
                     return
                 crowd_threshold = camera.crowd_threshold
-                abandoned_object_seconds = camera.abandoned_object_seconds
 
             frame = stream.get_latest_frame()
             if frame is None:
@@ -143,8 +140,7 @@ class DetectionEngine:
             try:
                 self._process_frame(
                     camera_id, frame, fall_pipeline, violence_detector,
-                    crowd_detector, abandoned_detector,
-                    crowd_threshold, abandoned_object_seconds,
+                    crowd_detector, crowd_threshold,
                 )
             except Exception:
                 logger.exception("Detection error on camera %s", camera_id)
@@ -153,7 +149,7 @@ class DetectionEngine:
 
     def _process_frame(
         self, camera_id, frame, fall_pipeline, violence_detector,
-        crowd_detector, abandoned_detector, crowd_threshold, abandoned_object_seconds,
+        crowd_detector, crowd_threshold,
     ):
         people = self.extract_people(frame)
 
@@ -168,16 +164,12 @@ class DetectionEngine:
             logger.info("Camera %s: VIOLENCE detected %s", camera_id, violence_event)
             recording_engine.trigger_event(camera_id, "violence", violence_event.get("confidence", 1.0))
 
-        person_boxes, other_objects = self.extract_objects(frame)
+        person_boxes, _ = self.extract_objects(frame)
 
         crowd_event = crowd_detector.update(len(person_boxes), crowd_threshold)
         if crowd_event:
             logger.info("Camera %s: CROWD detected %s", camera_id, crowd_event)
             recording_engine.trigger_event(camera_id, "crowd", crowd_event.get("confidence", 1.0))
-
-        for abandoned_event in abandoned_detector.update(other_objects, person_boxes, abandoned_object_seconds):
-            logger.info("Camera %s: ABANDONED_OBJECT detected %s", camera_id, abandoned_event)
-            recording_engine.trigger_event(camera_id, "abandoned_object", abandoned_event.get("confidence", 1.0))
 
     # -- model inference helpers -----------------------------------------
 
