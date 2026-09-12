@@ -2,7 +2,7 @@
 
 FastAPI backend for the SentinelCam AI surveillance platform: JWT-authenticated, role-based REST
 API, MJPEG live camera streaming, video upload & offline analysis, event-triggered recording,
-realtime WebSocket alerts, and YOLOv8-based fall / violence / crowd / abandoned-object detection.
+realtime WebSocket alerts, and YOLOv8-based fall / violence / crowd detection.
 See the root `README.md` for full architecture notes; this file covers backend-specific setup.
 
 ## Setup
@@ -161,8 +161,6 @@ matrix.
   trained model — see the docstring in `app/services/detection/violence_detection.py` and the
   `VIOLENCE_MODEL_PATH` config hook.
 - **Crowd detection** counts YOLO "person" detections rather than using a density-map model.
-- **Abandoned object tracking** uses a small hand-rolled centroid tracker rather than
-  DeepSORT/ByteTrack.
 - **Notifications** go through `app/services/notifications/` (a `Notifier` interface + fan-out
   service) — `email` is implemented; `sms`/`whatsapp` are documented stubs, not real integrations.
 - **Rate limiting** on `/auth/login`, `/auth/signup`, `/auth/forgot-password`,
