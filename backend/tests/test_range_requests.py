@@ -120,29 +120,35 @@ def test_unsatisfiable_range_returns_416(client, viewer_headers, recording):
 
 
 # --- list endpoints are bounded -------------------------------------------
+#
+# These endpoints used to take a `limit` that bounded the response but left
+# older rows unreachable. They are paginated now; the bound survives as
+# `page_size`, and the two assertions kept here are the ones this file has
+# always cared about - that a response cannot be made arbitrarily large.
+# Paging behaviour itself is covered in test_pagination.py.
 
 def test_recordings_listing_is_bounded(client, viewer_headers, recording):
     """An unbounded list grows with every clip a running camera produces,
     until the response is megabytes and the browser renders thousands of
     rows. The cap is generous; what matters is that one exists."""
-    from app.api.routes.recordings import DEFAULT_LIMIT, MAX_LIMIT
+    from app.core.pagination import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 
-    assert DEFAULT_LIMIT <= MAX_LIMIT
+    assert DEFAULT_PAGE_SIZE <= MAX_PAGE_SIZE
 
-    ok = client.get("/api/recordings", params={"limit": 1}, headers=viewer_headers)
+    ok = client.get("/api/recordings", params={"page_size": 1}, headers=viewer_headers)
     assert ok.status_code == 200
-    assert len(ok.json()) <= 1
+    assert len(ok.json()["items"]) <= 1
 
-    over = client.get("/api/recordings", params={"limit": MAX_LIMIT + 1}, headers=viewer_headers)
+    over = client.get("/api/recordings", params={"page_size": MAX_PAGE_SIZE + 1}, headers=viewer_headers)
     assert over.status_code == 422
 
-    under = client.get("/api/recordings", params={"limit": 0}, headers=viewer_headers)
+    under = client.get("/api/recordings", params={"page_size": 0}, headers=viewer_headers)
     assert under.status_code == 422
 
 
-def test_alerts_listing_rejects_an_out_of_range_limit(client, viewer_headers):
-    from app.api.routes.alerts import MAX_LIMIT
+def test_alerts_listing_rejects_an_out_of_range_page_size(client, viewer_headers):
+    from app.core.pagination import MAX_PAGE_SIZE
 
-    assert client.get("/api/alerts", params={"limit": MAX_LIMIT + 1}, headers=viewer_headers).status_code == 422
-    assert client.get("/api/alerts", params={"limit": 0}, headers=viewer_headers).status_code == 422
-    assert client.get("/api/alerts", params={"limit": 5}, headers=viewer_headers).status_code == 200
+    assert client.get("/api/alerts", params={"page_size": MAX_PAGE_SIZE + 1}, headers=viewer_headers).status_code == 422
+    assert client.get("/api/alerts", params={"page_size": 0}, headers=viewer_headers).status_code == 422
+    assert client.get("/api/alerts", params={"page_size": 5}, headers=viewer_headers).status_code == 200

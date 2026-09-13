@@ -75,6 +75,15 @@ STALE_SECONDS = 5.0                 # drop tracks not seen for this long
 # false-positive guard - see module docstring.
 FALL_MIN_SUSTAINED_SECONDS = 1.2
 
+# Minimum number of DISTINCT consecutive processed frames (not just
+# elapsed wall-clock time) the on-ground posture must hold for the same
+# tracked person, alongside FALL_MIN_SUSTAINED_SECONDS above. Duration
+# alone is normally plenty of processed frames at any sane detection rate
+# - this only guards the edge case where processing runs unusually slowly
+# and a couple of on-ground frames could otherwise span the sustained
+# window on their own.
+FALL_MIN_CONSECUTIVE_FRAMES = 3
+
 # Threshold above which the optional trained classifier (see
 # fall_classifier.py) is considered to "corroborate" a heuristic-detected
 # fall. Only used to adjust confidence, never to gate firing - see
@@ -96,7 +105,7 @@ def _avg_point(keypoints, indices, min_conf: float = MIN_KEYPOINT_CONF) -> Optio
 
 
 class _Track:
-    __slots__ = ("hip", "last_seen", "last_fall_time", "on_ground_since")
+    __slots__ = ("hip", "last_seen", "last_fall_time", "on_ground_since", "on_ground_hits")
 
     def __init__(self, hip, now: float):
         self.hip = hip
@@ -108,6 +117,9 @@ class _Track:
         # times frames from 0 at the start of each video.
         self.last_fall_time: Optional[float] = None
         self.on_ground_since: Optional[float] = None
+        # Consecutive processed frames (not wall-clock time) this track
+        # has been on-ground for, reset alongside on_ground_since below.
+        self.on_ground_hits: int = 0
 
 
 class FallDetector:
@@ -177,8 +189,10 @@ class FallDetector:
             if on_ground_now:
                 if track.on_ground_since is None:
                     track.on_ground_since = now
+                track.on_ground_hits += 1
             else:
                 track.on_ground_since = None
+                track.on_ground_hits = 0
 
             sustained_seconds = (now - track.on_ground_since) if track.on_ground_since is not None else 0.0
             signal_count = sum([wide_box, fallen_alignment, fast_downward])
@@ -190,6 +204,7 @@ class FallDetector:
             if (
                 on_ground_now
                 and sustained_seconds >= FALL_MIN_SUSTAINED_SECONDS
+                and track.on_ground_hits >= FALL_MIN_CONSECUTIVE_FRAMES
                 and not debounced
             ):
                 track.last_fall_time = now
@@ -211,6 +226,11 @@ class FallDetector:
                     "track_id": track_id,
                     "confidence": confidence,
                     "sustained_seconds": round(sustained_seconds, 2),
+                    # The box this event was decided on. Carried purely so
+                    # the annotation layer (detection/fall_annotation.py)
+                    # can draw the clip's box over the right subject; it
+                    # is read by nothing that decides anything.
+                    "bbox": tuple(float(v) for v in person.bbox),
                     **({"classifier_score": round(classifier_score, 3)} if classifier_score is not None else {}),
                 })
 
@@ -270,7 +290,10 @@ def _box_diagonal(bbox) -> float:
 
 
 class _ModelTrack:
-    __slots__ = ("centroid", "diagonal", "last_seen", "last_fall_time", "detected_since", "peak_confidence")
+    __slots__ = (
+        "centroid", "diagonal", "last_seen", "last_fall_time", "detected_since",
+        "peak_confidence", "frame_hits",
+    )
 
     def __init__(self, centroid, diagonal, now: float, confidence: float):
         self.centroid = centroid
@@ -279,6 +302,9 @@ class _ModelTrack:
         self.last_fall_time: Optional[float] = None
         self.detected_since: Optional[float] = now
         self.peak_confidence = confidence
+        # Consecutive processed frames (not wall-clock time) this track
+        # has been matched for since detected_since was last reset.
+        self.frame_hits: int = 1
 
 
 class ModelFallDetector:
@@ -292,11 +318,13 @@ class ModelFallDetector:
         self,
         min_sustained_seconds: float = 0.6,
         debounce_seconds: float = FALL_DEBOUNCE_SECONDS,
+        min_consecutive_frames: int = 3,
     ):
         self._tracks: Dict[int, _ModelTrack] = {}
         self._next_id = 0
         self._min_sustained_seconds = min_sustained_seconds
         self._debounce_seconds = debounce_seconds
+        self._min_consecutive_frames = max(int(min_consecutive_frames), 1)
 
     def update(self, detections: List, now: Optional[float] = None) -> List[dict]:
         """`detections` is any sequence of objects with `.bbox`
@@ -320,13 +348,22 @@ class ModelFallDetector:
                 track_id = self._next_id
                 self._next_id += 1
                 self._tracks[track_id] = _ModelTrack(centroid, diagonal, now, confidence)
+                is_new_track = True
+            else:
+                is_new_track = False
             matched_ids.add(track_id)
 
             track = self._tracks[track_id]
-            if track.detected_since is None:
+            if is_new_track:
+                pass  # __init__ already set detected_since/frame_hits/peak_confidence for frame 1
+            elif track.detected_since is None:
+                # Resuming after a gap: the streak restarts from frame 1,
+                # exactly like a brand new track.
                 track.detected_since = now
+                track.frame_hits = 1
                 track.peak_confidence = confidence
             else:
+                track.frame_hits += 1
                 track.peak_confidence = max(track.peak_confidence, confidence)
 
             track.centroid = centroid
@@ -339,7 +376,11 @@ class ModelFallDetector:
                 and (now - track.last_fall_time) <= self._debounce_seconds
             )
 
-            if sustained_seconds >= self._min_sustained_seconds and not debounced:
+            if (
+                sustained_seconds >= self._min_sustained_seconds
+                and track.frame_hits >= self._min_consecutive_frames
+                and not debounced
+            ):
                 track.last_fall_time = now
                 events.append({
                     "track_id": track_id,
@@ -349,6 +390,9 @@ class ModelFallDetector:
                     "confidence": round(track.peak_confidence, 2),
                     "sustained_seconds": round(sustained_seconds, 2),
                     "detector": "model",
+                    # The box this event was decided on - see the same key
+                    # in FallDetector.update above. Annotation only.
+                    "bbox": tuple(float(v) for v in detection.bbox),
                 })
 
         # A track the model stopped seeing has to restart its sustain
@@ -358,6 +402,7 @@ class ModelFallDetector:
         for track_id, track in self._tracks.items():
             if track_id not in matched_ids:
                 track.detected_since = None
+                track.frame_hits = 0
 
         self._prune(now)
         return events

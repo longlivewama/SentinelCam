@@ -1,10 +1,10 @@
 import os
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_admin
+from app.core.pagination import Page, PageParams, paginate
 from app.core.security import hash_password
 from app.database import get_db
 from app.models.password_reset_token import PasswordResetToken
@@ -16,9 +16,20 @@ from app.services.cascade_delete import stage_delete_video_upload, unlink_user_f
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-@router.get("/users", response_model=List[UserOut])
-def list_users(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
-    return db.query(User).order_by(User.created_at.asc()).all()
+@router.get("/users", response_model=Page[UserOut])
+def list_users(
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_admin),
+):
+    """Oldest first - the account list reads as a history of who was added,
+    and an admin looking for a colleague they invited last week should not
+    have to work backwards from the newest signup.
+
+    Paged because a fetch of every account is unbounded by anything except
+    how successful the deployment is. id breaks ties for accounts seeded in
+    the same transaction, which share a created_at."""
+    return paginate(db.query(User), page, User.created_at.asc(), User.id.asc())
 
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)

@@ -650,7 +650,9 @@ def test_delete_on_a_pending_upload_defers_and_the_file_survives_until_finalized
 
     # But it must already read as fully gone through the API.
     assert client.get(f"/api/video-uploads/{upload_id}", headers=viewer_headers).status_code == 404
-    assert upload_id not in [u["id"] for u in client.get("/api/video-uploads", headers=viewer_headers).json()]
+    assert upload_id not in [
+        u["id"] for u in client.get("/api/video-uploads", headers=viewer_headers).json()["items"]
+    ]
 
     # A second DELETE behaves like deleting an already-gone upload always
     # has - 404, not a second 204 - and does not disturb the pending flag.

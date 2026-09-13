@@ -1,11 +1,57 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import apiClient, { API_URL } from '../api/client'
+import apiClient from '../api/client'
 import { useAuthStore } from '../store/authStore'
 import CameraForm from '../components/CameraForm'
+import CameraStream from '../components/CameraStream'
+import FallBoundingBoxOverlay from '../components/FallBoundingBoxOverlay'
+import MediaDownloadLink from '../components/MediaDownloadLink'
 import Modal from '../components/Modal'
 import VideoModal from '../components/VideoModal'
+import { onRealtimeEvent } from '../lib/realtime'
 import { formatDateTime, formatDuration, formatBytes, eventTypeMeta } from '../lib/format'
+
+// How long a live fall box stays drawn on screen after it fires. The
+// underlying event is a single moment, not a stream of positions (see
+// detection/engine.py's `fall.bbox` broadcast), so this is a "flash it up
+// long enough for a human to see it" duration rather than a tracked
+// duration.
+const FALL_BBOX_DISPLAY_MS = 6000
+
+// Small ON/OFF pill. Read-only (a badge) for viewers; an operator gets a
+// clickable toggle that fires `onToggle` with the opposite of `on`.
+function StateToggle({ label, on, onLabel = 'ON', offLabel = 'OFF', onToggle, busy }) {
+  const badge = (
+    <span
+      className={`sc-badge border ${
+        on ? 'bg-status-ok/10 text-status-ok border-status-ok/30' : 'bg-surface-800 text-slate-400 border-surface-600'
+      }`}
+    >
+      {on ? onLabel : offLabel}
+    </span>
+  )
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs font-medium uppercase tracking-wider text-slate-400">{label}</span>
+      {onToggle ? (
+        <button
+          type="button"
+          onClick={() => onToggle(!on)}
+          disabled={busy}
+          className={`sc-badge border transition ${
+            on
+              ? 'bg-status-ok/10 text-status-ok border-status-ok/30 hover:bg-status-ok/20'
+              : 'bg-surface-800 text-slate-400 border-surface-600 hover:bg-surface-700'
+          } ${busy ? 'opacity-60' : ''}`}
+        >
+          {on ? onLabel : offLabel}
+        </button>
+      ) : (
+        badge
+      )}
+    </div>
+  )
+}
 
 const STATUS_STYLES = {
   active: 'bg-status-ok/10 text-status-ok border-status-ok/30',
@@ -23,7 +69,6 @@ export default function CameraDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const isOperator = useAuthStore((s) => s.isOperator())
-  const token = useAuthStore((s) => s.token)
 
   const [camera, setCamera] = useState(null)
   const [recordings, setRecordings] = useState([])
@@ -32,6 +77,9 @@ export default function CameraDetail() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [viewingRecording, setViewingRecording] = useState(null)
+  const [fallAlert, setFallAlert] = useState(null)
+  const [togglingField, setTogglingField] = useState(null)
+  const fallAlertTimeout = useRef(null)
 
   const fetchData = async () => {
     setLoading(true)
@@ -39,10 +87,12 @@ export default function CameraDetail() {
     try {
       const [cameraRes, recordingsRes] = await Promise.all([
         apiClient.get(`/api/cameras/${id}`),
-        apiClient.get('/api/recordings', { params: { camera_id: id } }),
+        // A bounded 'recent recordings' panel; the full history is on the
+        // Recordings page, which pages properly.
+        apiClient.get('/api/recordings', { params: { camera_id: id, page_size: 10 } }),
       ])
       setCamera(cameraRes.data)
-      setRecordings(recordingsRes.data)
+      setRecordings(recordingsRes.data.items)
     } catch {
       setError('Failed to load camera details.')
     } finally {
@@ -55,10 +105,45 @@ export default function CameraDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id])
 
+  // Live fall-box overlay: the backend broadcasts the exact box a fall
+  // fired on (detection/engine.py's `fall.bbox`) the moment it happens -
+  // this just displays it for a few seconds over the live view. No
+  // subscription while the camera is off, and any box already showing is
+  // cleared the instant it's switched off.
+  useEffect(() => {
+    if (!camera?.is_active) {
+      setFallAlert(null)
+      return undefined
+    }
+    const unsubscribe = onRealtimeEvent((message) => {
+      if (message?.type !== 'fall.bbox' || message?.data?.camera_id !== Number(id)) return
+      clearTimeout(fallAlertTimeout.current)
+      setFallAlert(message.data)
+      fallAlertTimeout.current = setTimeout(() => setFallAlert(null), FALL_BBOX_DISPLAY_MS)
+    })
+    return () => {
+      unsubscribe()
+      clearTimeout(fallAlertTimeout.current)
+    }
+  }, [id, camera?.is_active])
+
   const handleUpdate = async (payload) => {
     const { data } = await apiClient.put(`/api/cameras/${id}`, payload)
     setCamera(data)
     setShowEditModal(false)
+  }
+
+  const handleToggleField = (field) => async (nextValue) => {
+    setTogglingField(field)
+    setError('')
+    try {
+      const { data } = await apiClient.put(`/api/cameras/${id}`, { [field]: nextValue })
+      setCamera(data)
+    } catch {
+      setError(`Failed to update camera ${field === 'is_active' ? 'status' : 'AI detection'}.`)
+    } finally {
+      setTogglingField(null)
+    }
   }
 
   const handleDelete = async () => {
@@ -89,8 +174,6 @@ export default function CameraDetail() {
 
   if (!camera) return null
 
-  const streamUrl = `${API_URL}/api/cameras/${camera.id}/stream?token=${token}`
-
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
       <button onClick={() => navigate('/cameras')} className="mb-4 text-sm text-slate-400 hover:text-accent-cyan">
@@ -99,11 +182,36 @@ export default function CameraDetail() {
 
       <div className="sc-card mb-6 overflow-hidden">
         <div className="relative aspect-video w-full bg-black">
-          <img src={streamUrl} alt={`${camera.name} live stream`} className="h-full w-full object-contain" />
-          <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-md bg-surface-950/70 px-2.5 py-1 backdrop-blur">
-            <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">Live</span>
-          </div>
+          {camera.is_active ? (
+            <>
+              <CameraStream
+                cameraId={camera.id}
+                alt={`${camera.name} live stream`}
+                className="h-full w-full object-contain"
+              />
+              <div className="absolute left-3 top-3 flex items-center gap-1.5 rounded-md bg-surface-950/70 px-2.5 py-1 backdrop-blur">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">Live</span>
+              </div>
+              {fallAlert && (
+                <FallBoundingBoxOverlay
+                  bbox={fallAlert.bbox}
+                  frameWidth={fallAlert.frame_width}
+                  frameHeight={fallAlert.frame_height}
+                  confidence={fallAlert.confidence}
+                  trackId={fallAlert.track_id}
+                />
+              )}
+            </>
+          ) : (
+            // Camera is intentionally off - a broken <img> would read as a
+            // fault; this reads as a deliberate state instead.
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-slate-500">
+              <span className="h-2.5 w-2.5 rounded-full bg-slate-600" />
+              <p className="text-sm font-semibold uppercase tracking-wider">Camera Off</p>
+              <p className="text-xs text-slate-600">Turn the camera on below to resume the live view.</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -134,24 +242,36 @@ export default function CameraDetail() {
           </div>
         )}
 
+        <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg border border-surface-700 bg-surface-900/40 px-4 py-3">
+          <StateToggle
+            label="Camera"
+            on={camera.is_active}
+            onToggle={isOperator ? handleToggleField('is_active') : undefined}
+            busy={togglingField === 'is_active'}
+          />
+          <StateToggle
+            label="AI Detection"
+            on={camera.ai_detection_enabled}
+            onToggle={isOperator ? handleToggleField('ai_detection_enabled') : undefined}
+            busy={togglingField === 'ai_detection_enabled'}
+          />
+          <StateToggle label="Live Video" on={camera.is_active} onLabel="ACTIVE" offLabel="INACTIVE" />
+          <StateToggle
+            label="Fall Detection"
+            on={camera.is_active && camera.ai_detection_enabled}
+            onLabel="RUNNING"
+            offLabel="STOPPED"
+          />
+        </div>
+
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div>
             <dt className="sc-label">Type</dt>
             <dd className="text-sm text-slate-200 uppercase">{camera.camera_type}</dd>
           </div>
           <div>
-            <dt className="sc-label">Status</dt>
+            <dt className="sc-label">Connection</dt>
             <dd className="text-sm text-slate-200 capitalize">{camera.status}</dd>
-          </div>
-          <div>
-            <dt className="sc-label">AI Detection</dt>
-            <dd className="text-sm text-slate-200">
-              {camera.ai_detection_enabled ? 'Enabled' : 'Disabled'}
-            </dd>
-          </div>
-          <div>
-            <dt className="sc-label">Active</dt>
-            <dd className="text-sm text-slate-200">{camera.is_active ? 'Yes' : 'No'}</dd>
           </div>
           <div>
             <dt className="sc-label">Crowd Threshold</dt>
@@ -176,7 +296,6 @@ export default function CameraDetail() {
           <div className="flex flex-col divide-y divide-surface-800">
             {recordings.map((rec) => {
               const meta = eventTypeMeta(rec.trigger_action)
-              const downloadUrl = `${API_URL}/api/recordings/${rec.id}/download?token=${token}`
               return (
                 <div key={rec.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div className="flex items-center gap-3">
@@ -195,9 +314,7 @@ export default function CameraDetail() {
                     <button onClick={() => setViewingRecording(rec)} className="sc-btn-secondary px-3 py-1.5 text-xs">
                       View
                     </button>
-                    <a href={downloadUrl} className="sc-btn-secondary px-3 py-1.5 text-xs">
-                      Download
-                    </a>
+                    <MediaDownloadLink kind="recording" id={rec.id} />
                   </div>
                 </div>
               )

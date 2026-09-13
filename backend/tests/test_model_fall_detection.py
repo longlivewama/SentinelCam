@@ -87,6 +87,44 @@ def test_two_separate_subjects_are_tracked_independently():
     assert len({e["track_id"] for e in events}) == 2
 
 
+def test_sustained_duration_alone_is_not_enough_without_enough_qualifying_frames():
+    """Two detections far apart in wall-clock time (e.g. unusually slow
+    inference) already satisfy the duration gate on their own - that must
+    not be enough. Confirmation requires several distinct qualifying
+    frames on the same track, not just elapsed time."""
+    detector = ModelFallDetector(min_sustained_seconds=0.6, min_consecutive_frames=3)
+
+    events = detector.update([FALLEN], now=0.0)
+    assert events == []
+
+    # Duration alone already clears the 0.6s gate here, but this is only
+    # the 2nd distinct frame - still short of the 3-frame floor.
+    events = detector.update([FALLEN], now=0.7)
+    assert events == []
+
+    # A 3rd qualifying frame - now both the duration and frame-count gates
+    # are satisfied, and exactly one event fires.
+    events = detector.update([FALLEN], now=0.75)
+    assert len(events) == 1
+
+
+def test_a_gap_resets_the_qualifying_frame_count_not_just_the_duration():
+    """After the track is lost and reacquired, slow processing must not
+    let two post-gap detections alone satisfy confirmation - the 3-frame
+    floor restarts from the reacquisition, exactly like the duration timer
+    already did."""
+    detector = ModelFallDetector(min_sustained_seconds=0.2, min_consecutive_frames=3)
+
+    detector.update([FALLEN], now=0.0)
+    detector.update([], now=0.1)  # lost: both the timer and the frame count restart
+    detector.update([FALLEN], now=0.5)  # reacquired - frame 1 of the new streak
+    events = detector.update([FALLEN], now=1.0)  # frame 2; duration (0.5s) alone already clears 0.2s
+    assert events == []
+
+    events = detector.update([FALLEN], now=1.05)  # frame 3 - now both gates clear
+    assert len(events) == 1
+
+
 def test_a_subject_that_drifts_slightly_stays_one_track():
     """Small frame-to-frame movement must not split into new tracks, which
     would reset the sustain timer forever and suppress every alert."""

@@ -1,11 +1,8 @@
-import { API_URL } from '../api/client'
-import { useAuthStore } from '../store/authStore'
+import MediaDownloadLink from './MediaDownloadLink'
 import { formatBytes, formatDateTime, formatDuration, eventTypeMeta } from '../lib/format'
 
 export default function RecordingRow({ recording, cameraName, onView, onDelete }) {
-  const token = useAuthStore((s) => s.token)
   const meta = eventTypeMeta(recording.trigger_action)
-  const downloadUrl = `${API_URL}/api/recordings/${recording.id}/download?token=${token}`
 
   return (
     <tr className="border-b border-surface-800 last:border-b-0 hover:bg-surface-800/40">
@@ -32,9 +29,7 @@ export default function RecordingRow({ recording, cameraName, onView, onDelete }
           <button onClick={() => onView?.(recording)} className="sc-btn-secondary px-3 py-1.5 text-xs">
             View
           </button>
-          <a href={downloadUrl} className="sc-btn-secondary px-3 py-1.5 text-xs">
-            Download
-          </a>
+          <MediaDownloadLink kind="recording" id={recording.id} />
           {onDelete && (
             <button
               onClick={() => onDelete(recording)}
