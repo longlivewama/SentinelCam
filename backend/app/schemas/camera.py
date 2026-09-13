@@ -66,3 +66,4 @@ class CameraOut(CameraBase):
     status: str
     is_active: bool
     created_at: datetime
+    deleted_at: Optional[datetime] = None

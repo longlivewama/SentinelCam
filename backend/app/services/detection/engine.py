@@ -29,6 +29,7 @@ import logging
 import threading
 import time
 from collections import namedtuple
+from datetime import datetime, timezone
 from typing import Dict
 
 from ultralytics import YOLO
@@ -37,6 +38,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models.camera import Camera
 from app.services import recording_engine
+from app.services.realtime import realtime_broadcaster
 from app.services.stream_manager import stream_manager
 from app.services.detection.fall_pipeline import FallPipeline
 from app.services.detection.violence_detection import ViolenceDetector
@@ -159,6 +161,7 @@ class DetectionEngine:
                 camera_id, "fall", fall_event.get("confidence", 1.0),
                 detector=fall_event.get("detector", "heuristic"),
             )
+            self._broadcast_fall_bbox(camera_id, frame, fall_event)
 
         for violence_event in violence_detector.update(people):
             logger.info("Camera %s: VIOLENCE detected %s", camera_id, violence_event)
@@ -170,6 +173,37 @@ class DetectionEngine:
         if crowd_event:
             logger.info("Camera %s: CROWD detected %s", camera_id, crowd_event)
             recording_engine.trigger_event(camera_id, "crowd", crowd_event.get("confidence", 1.0))
+
+    def _broadcast_fall_bbox(self, camera_id, frame, fall_event: dict):
+        """Publishes the box a fall fired on to any connected live-view
+        client, over the same realtime channel as `alert.created`/
+        `camera.status` (shared infrastructure - every authenticated user
+        may watch a camera's stream, so no owner_user_id scoping).
+
+        The box is exactly `fall_event["bbox"]` - the region the gate in
+        detection/fall_detection.py already decided on, in this frame's
+        own pixel coordinates - plus the frame's dimensions so a client can
+        scale it onto whatever size it is displaying the MJPEG stream at.
+        Nothing is computed or inferred here; a fall event with no bbox
+        (should not happen for either strategy - see fall_detection.py)
+        simply isn't drawable, so it's skipped rather than guessed at."""
+        bbox = fall_event.get("bbox")
+        if bbox is None:
+            return
+        height, width = frame.shape[:2]
+        realtime_broadcaster.publish(
+            "fall.bbox",
+            {
+                "camera_id": camera_id,
+                "bbox": [float(v) for v in bbox],
+                "frame_width": int(width),
+                "frame_height": int(height),
+                "confidence": fall_event.get("confidence", 1.0),
+                "track_id": fall_event.get("track_id"),
+                "detector": fall_event.get("detector", "heuristic"),
+                "timestamp": datetime.now(timezone.utc),
+            },
+        )
 
     # -- model inference helpers -----------------------------------------
 

@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -30,9 +31,25 @@ _media_access = MediaAccess(MEDIA_KIND_CAMERA, "camera_id")
 
 
 def _sync_detection_state(camera: Camera):
-    """Start/stop the background detection loop for this camera to match
-    its current is_active / ai_detection_enabled flags."""
-    if camera.is_active and camera.ai_detection_enabled:
+    """Start/stop the background detection loop - and, when the camera is
+    switched off, the underlying capture thread too - to match its current
+    is_active / ai_detection_enabled flags.
+
+    A camera turned off must stop ALL live processing, not just AI
+    inference: nobody can reach its stream (see stream_camera below, which
+    404s once is_active is False) so a capture thread still polling the
+    hardware afterwards would just be wasted work. Turning it back on
+    needs no symmetric start here - the capture thread starts lazily,
+    exactly as it always has, the next time someone opens the stream or
+    detection is (re)enabled."""
+    if not camera.is_active:
+        detection_engine.stop(camera.id)
+        stream = stream_manager.get(camera.id)
+        if stream is not None:
+            stream.stop()
+        return
+
+    if camera.ai_detection_enabled:
         detection_engine.ensure_running(camera.id, camera.url)
     else:
         detection_engine.stop(camera.id)
@@ -62,7 +79,10 @@ def _visible_camera(camera: Camera, user: User) -> CameraOut:
 
 @router.get("", response_model=List[CameraOut])
 def list_cameras(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    cameras = db.query(Camera).filter(Camera.is_active == True).all()  # noqa: E712
+    # Deleted cameras drop out of the list; merely-off ones (is_active is
+    # False but deleted_at is unset) stay visible so they can be switched
+    # back on - see _sync_detection_state's docstring above.
+    cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).all()
     return [_visible_camera(camera, current_user) for camera in cameras]
 
 
@@ -82,7 +102,7 @@ def create_camera(
 
 @router.get("/{camera_id}", response_model=CameraOut)
 def get_camera(camera_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
     return _visible_camera(camera, current_user)
@@ -95,7 +115,7 @@ def update_camera(
     db: Session = Depends(get_db),
     _operator: User = Depends(require_operator),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
@@ -114,16 +134,14 @@ def delete_camera(
     db: Session = Depends(get_db),
     _operator: User = Depends(require_operator),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
     camera.is_active = False
+    camera.deleted_at = datetime.now(timezone.utc)
     db.commit()
-    detection_engine.stop(camera.id)
-    stream = stream_manager.get(camera.id)
-    if stream is not None:
-        stream.stop()
+    _sync_detection_state(camera)
     return None
 
 
@@ -137,7 +155,7 @@ def create_camera_media_token(
     else. Applies the same active-camera check the stream endpoint
     applies, so a token is never minted for a camera that could not be
     watched anyway."""
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if camera is None or not camera.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
     return issue_media_token(current_user, MEDIA_KIND_CAMERA, camera.id)
@@ -149,7 +167,7 @@ def stream_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(_media_access),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if camera is None or not camera.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
