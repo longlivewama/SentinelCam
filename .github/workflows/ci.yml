@@ -175,7 +175,12 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
+      # Full history, not the default shallow (depth-1) checkout: the
+      # credential-diff scan below needs HEAD~1 / merge-base to resolve,
+      # which a shallow clone can't do.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
