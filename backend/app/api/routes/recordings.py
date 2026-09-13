@@ -9,32 +9,37 @@ enforces the same one - see that module for why.
 """
 import logging
 import os
-from typing import List, Optional
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, get_current_user_allowing_query_token, require_operator
+from app.core.deps import (
+    MEDIA_KIND_RECORDING,
+    MediaAccess,
+    get_current_user,
+    issue_media_token,
+    require_operator,
+)
+from app.core.pagination import Page, PageParams, paginate
 from app.core.ranges import media_type_for, serve_file_range
 from app.core.scoping import can_access_upload_id, scope_recordings
 from app.database import get_db
 from app.models.recording import Recording
 from app.services.cascade_delete import stage_delete_recording
 from app.models.user import User
+from app.schemas.media import MediaTokenOut
 from app.schemas.recording import RecordingOut
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
-# Newest-first with a bound rather than an unbounded fetch: a camera left
-# running produces clips indefinitely, and "return every row" turns into a
-# multi-megabyte response and a browser rendering thousands of rows. The
-# cap is generous enough that no realistic UI hits it; real pagination is
-# on the roadmap.
-DEFAULT_LIMIT = 500
-MAX_LIMIT = 1000
+# Reached by <video src> and <a href download>, neither of which can send
+# an Authorization header - so they take a short-lived, clip-scoped media
+# token in the query string instead (see core/deps.MediaAccess).
+_media_access = MediaAccess(MEDIA_KIND_RECORDING, "recording_id")
 
 
 
@@ -60,20 +65,35 @@ def _existing_file_or_404(recording: Recording) -> str:
     return recording.file_path
 
 
-@router.get("", response_model=List[RecordingOut])
+@router.get("", response_model=Page[RecordingOut])
 def list_recordings(
     camera_id: Optional[int] = None,
     video_upload_id: Optional[int] = None,
-    limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    trigger_action: Optional[str] = None,
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Newest first. A camera left running produces clips indefinitely, so
+    this is paged rather than bounded by a `limit` that put older events
+    permanently out of reach.
+
+    `trigger_action` filters server-side because paging made client-side
+    filtering wrong: filtering the twenty rows that happened to be on the
+    current page hides matches on every other page, and leaves the page
+    count describing the unfiltered list."""
+    # Ownership filter first, and in SQL, so `total` counts only what this
+    # user may see and no later branch can widen it.
     query = scope_recordings(db.query(Recording), current_user)
     if camera_id is not None:
         query = query.filter(Recording.camera_id == camera_id)
     if video_upload_id is not None:
         query = query.filter(Recording.video_upload_id == video_upload_id)
-    return query.order_by(Recording.event_timestamp.desc()).limit(limit).all()
+    if trigger_action is not None:
+        query = query.filter(Recording.trigger_action == trigger_action)
+    # id breaks ties: clips written in the same transaction share a
+    # timestamp, and without it a row could appear on two pages.
+    return paginate(query, page, Recording.event_timestamp.desc(), Recording.id.desc())
 
 
 @router.get("/{recording_id}", response_model=RecordingOut)
@@ -85,13 +105,28 @@ def get_recording(
     return _get_recording_or_404(recording_id, db, current_user)
 
 
+@router.post("/{recording_id}/media-token", response_model=MediaTokenOut)
+def create_recording_media_token(
+    recording_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mints a token that plays or downloads THIS clip and nothing else.
+
+    Deliberately runs the same `_get_recording_or_404` the streaming
+    endpoints run, so a token is never issued for a recording the caller
+    could not already fetch - and a caller probing for clips they cannot
+    see gets the same 404 here as everywhere else."""
+    recording = _get_recording_or_404(recording_id, db, current_user)
+    return issue_media_token(current_user, MEDIA_KIND_RECORDING, recording.id)
+
+
 @router.get("/{recording_id}/video")
 def stream_video(
     recording_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    # Reached by <video src>, which cannot send an Authorization header.
-    current_user: User = Depends(get_current_user_allowing_query_token),
+    current_user: User = Depends(_media_access),
 ):
     recording = _get_recording_or_404(recording_id, db, current_user)
     file_path = _existing_file_or_404(recording)
@@ -102,8 +137,7 @@ def stream_video(
 def download_recording(
     recording_id: int,
     db: Session = Depends(get_db),
-    # Reached by <video src>, which cannot send an Authorization header.
-    current_user: User = Depends(get_current_user_allowing_query_token),
+    current_user: User = Depends(_media_access),
 ):
     recording = _get_recording_or_404(recording_id, db, current_user)
     file_path = _existing_file_or_404(recording)

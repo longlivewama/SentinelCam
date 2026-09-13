@@ -2,7 +2,15 @@
   "_comment": [
     "Template for ml/data/validation/annotations.json. Copy it there, delete this",
     "_comment key, and replace the entries with your own clips.",
-    "Times are seconds from the start of the clip. See README.md in this directory."
+    "Times are seconds from the start of the clip. See README.md in this directory.",
+    "",
+    "`direction` (forward|backward|sideways) and `speed` (slow|fast) are optional but",
+    "strongly wanted: without them recall cannot be split by fall type, and a detector",
+    "that is far worse at backward falls looks identical to one that is not.",
+    "",
+    "`conditions` is optional and keyed by lighting, camera_angle, distance, occlusion,",
+    "resolution. Values are free text. Without at least two distinct values on a",
+    "dimension there is nothing to compare across, so the per-condition table stays empty."
   ],
 
   "videos": [
@@ -15,9 +23,18 @@
           "id": "kitchen-01",
           "start_seconds": 8.2,
           "end_seconds": 10.0,
+          "direction": "forward",
+          "speed": "fast",
           "notes": "trips on rug, lands on left side, remains down for the rest of the clip"
         }
       ],
+      "conditions": {
+        "lighting": "daylight",
+        "camera_angle": "high_corner",
+        "distance": "mid",
+        "occlusion": "none",
+        "resolution": "1080p"
+      },
       "notes": "ceiling-corner camera, daylight"
     },
     {
@@ -25,10 +42,25 @@
       "duration_seconds": 41.0,
       "category": "fall",
       "incidents": [
-        {"id": "bedroom-02a", "start_seconds": 6.0, "end_seconds": 7.5, "notes": "slides off bed edge"},
-        {"id": "bedroom-02b", "start_seconds": 28.0, "end_seconds": 30.2, "notes": "second fall while standing back up"}
+        {
+          "id": "bedroom-02a", "start_seconds": 6.0, "end_seconds": 7.5,
+          "direction": "sideways", "speed": "slow",
+          "notes": "slides off bed edge"
+        },
+        {
+          "id": "bedroom-02b", "start_seconds": 28.0, "end_seconds": 30.2,
+          "direction": "backward", "speed": "fast",
+          "notes": "second fall while standing back up"
+        }
       ],
-      "notes": "two incidents in one clip"
+      "conditions": {
+        "lighting": "dim",
+        "camera_angle": "ceiling",
+        "distance": "near",
+        "occlusion": "partial",
+        "resolution": "720p"
+      },
+      "notes": "two incidents in one clip, and two different fall types"
     },
     {
       "filename": "hardneg_sitting_01.mp4",
@@ -38,7 +70,8 @@
       "incidents": [],
       "activity_intervals": [
         {"start_seconds": 3.0, "end_seconds": 7.5, "label": "sits down heavily into armchair"}
-      ]
+      ],
+      "conditions": {"lighting": "daylight", "camera_angle": "eye_level", "distance": "near"}
     },
     {
       "filename": "hardneg_exercise_01.mp4",
@@ -50,6 +83,7 @@
         {"start_seconds": 5.0, "end_seconds": 35.0, "label": "sit-ups on a floor mat"},
         {"start_seconds": 40.0, "end_seconds": 55.0, "label": "stretching, lying prone"}
       ],
+      "conditions": {"lighting": "daylight", "camera_angle": "high_corner", "distance": "mid"},
       "notes": "the single most important hard-negative category - sustained on-ground posture"
     },
     {
@@ -60,7 +94,19 @@
       "incidents": [],
       "activity_intervals": [
         {"start_seconds": 10.0, "end_seconds": 45.0, "label": "lies down on sofa, stays there"}
-      ]
+      ],
+      "conditions": {"lighting": "dim", "camera_angle": "high_corner", "distance": "far"}
+    },
+    {
+      "filename": "hardneg_pet_01.mp4",
+      "duration_seconds": 30.0,
+      "category": "hard_negative",
+      "activity": "pet",
+      "incidents": [],
+      "activity_intervals": [
+        {"start_seconds": 2.0, "end_seconds": 28.0, "label": "dog lies on the floor, person walks past"}
+      ],
+      "conditions": {"lighting": "night_ir", "camera_angle": "high_corner", "distance": "mid"}
     }
   ]
 }

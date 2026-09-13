@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, is_media_token
 from app.database import SessionLocal
 from app.models.user import User
 from app.services.realtime import realtime_broadcaster
@@ -47,6 +47,17 @@ WS_TOKEN_EXPIRED = 4403
 async def websocket_events(websocket: WebSocket, token: str):
     payload = decode_access_token(token)
     if payload is None:
+        await websocket.close(code=WS_UNAUTHORIZED)
+        return
+
+    # A media token is a read credential for one clip (see
+    # core/security.py). This channel delivers every alert, camera status
+    # change and upload progress event the subscriber can see, so honouring
+    # one here would make a token handed out for a `<video src>` a live
+    # feed of the account - the exact escalation the media/session split
+    # exists to prevent. The session token is the only credential for this
+    # endpoint.
+    if is_media_token(payload):
         await websocket.close(code=WS_UNAUTHORIZED)
         return
 

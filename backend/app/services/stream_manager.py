@@ -24,6 +24,7 @@ from typing import Optional
 import cv2
 
 from app.config import settings
+from app.core.camera_url import redact_credentials
 from app.database import SessionLocal
 from app.models.camera import Camera
 from app.services.realtime import realtime_broadcaster
@@ -51,7 +52,11 @@ class CameraStream:
         self._lock = threading.Lock()
         self._latest_jpeg: Optional[bytes] = None
         self._latest_frame = None  # raw ndarray, most recently captured
-        self._frame_buffer = deque(maxlen=settings.ROLLING_BUFFER_FRAMES)
+        # Sized in frames from settings.PRE_EVENT_SECONDS - see
+        # recording_engine.py's module docstring for how this buffer is
+        # consumed once an event fires.
+        buffer_frames = max(1, int(settings.PRE_EVENT_SECONDS * settings.STREAM_FPS))
+        self._frame_buffer = deque(maxlen=buffer_frames)
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -117,9 +122,14 @@ class CameraStream:
             cap = cv2.VideoCapture(source)
             if not cap.isOpened():
                 self._consecutive_failures += 1
+                # An IP camera URL carries its credentials inline, and this
+                # line fires for every unreachable or misconfigured camera -
+                # i.e. routinely, and into whatever aggregator the logs are
+                # shipped to. The host and path are what make it useful for
+                # debugging; the userinfo is the camera's password.
                 logger.warning(
                     "Camera %s: failed to open source %r (attempt %d)",
-                    self.camera_id, source, self._consecutive_failures,
+                    self.camera_id, redact_credentials(source), self._consecutive_failures,
                 )
                 if self._consecutive_failures >= 3:
                     self._set_status("error")

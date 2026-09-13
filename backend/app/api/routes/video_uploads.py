@@ -10,19 +10,20 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.deps import get_current_user, get_current_user_allowing_query_token
+from app.core.deps import MEDIA_KIND_UPLOAD, MediaAccess, get_current_user, issue_media_token
+from app.core.pagination import Page, PageParams, paginate
 from app.core.ranges import serve_file_range
 from app.core.video_signature import looks_like_supported_video
 from app.database import get_db
 from app.models.user import User
 from app.models.video_upload import STATUS_PENDING, STATUS_PROCESSING, VideoUpload
+from app.schemas.media import MediaTokenOut
 from app.schemas.video_upload import VideoUploadOut
 from app.services.cascade_delete import remove_upload_clip_dir, stage_delete_video_upload
 from app.services.video_analysis import analyze_video_upload
@@ -31,16 +32,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/video-uploads", tags=["video-uploads"])
 
+# The source video is played back by <video src>, which cannot send an
+# Authorization header - see core/deps.MediaAccess.
+_media_access = MediaAccess(MEDIA_KIND_UPLOAD, "upload_id")
+
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 MAX_UPLOAD_SIZE_BYTES = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 # Enough of the first chunk to cover every container signature we check
 # (the longest, Matroska/WebM's EBML DocType, sits within the first 64
 # bytes in practice; 256 leaves generous headroom).
 HEADER_SNIFF_BYTES = 256
-
-# See recordings.py for why the list endpoints are bounded.
-DEFAULT_LIST_LIMIT = 500
-MAX_LIST_LIMIT = 1000
 
 
 def _get_upload_or_404(upload_id: int, db: Session) -> VideoUpload:
@@ -191,16 +192,20 @@ async def create_video_upload(
     return upload
 
 
-@router.get("", response_model=List[VideoUploadOut])
+@router.get("", response_model=Page[VideoUploadOut])
 def list_video_uploads(
-    limit: int = Query(default=DEFAULT_LIST_LIMIT, ge=1, le=MAX_LIST_LIMIT),
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Newest first. Rows mid-teardown are excluded here, not just from the
+    detail endpoint, so a deleted upload cannot reappear in a listing."""
     query = db.query(VideoUpload).filter(VideoUpload.deletion_requested.is_(False))
+    # Ownership in SQL, before the count: a viewer's `total` must be their
+    # own upload count, not everyone's.
     if not current_user.is_operator:
         query = query.filter(VideoUpload.user_id == current_user.id)
-    return query.order_by(VideoUpload.created_at.desc()).limit(limit).all()
+    return paginate(query, page, VideoUpload.created_at.desc(), VideoUpload.id.desc())
 
 
 @router.get("/{upload_id}", response_model=VideoUploadOut)
@@ -214,13 +219,26 @@ def get_video_upload(
     return upload
 
 
+@router.post("/{upload_id}/media-token", response_model=MediaTokenOut)
+def create_upload_media_token(
+    upload_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mints a token that streams THIS upload's source video and nothing
+    else. Runs the same 404/ownership checks the streaming endpoint runs,
+    so a token cannot be obtained for someone else's upload."""
+    upload = _get_upload_or_404(upload_id, db)
+    _ensure_can_view(upload, current_user)
+    return issue_media_token(current_user, MEDIA_KIND_UPLOAD, upload.id)
+
+
 @router.get("/{upload_id}/video")
 def stream_video_upload(
     upload_id: int,
     request: Request,
     db: Session = Depends(get_db),
-    # Reached by <video src>, which cannot send an Authorization header.
-    current_user: User = Depends(get_current_user_allowing_query_token),
+    current_user: User = Depends(_media_access),
 ):
     upload = _get_upload_or_404(upload_id, db)
     _ensure_can_view(upload, current_user)

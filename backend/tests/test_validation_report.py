@@ -226,7 +226,7 @@ def test_missed_falls_note_whether_the_clip_produced_anything_at_all():
     video = fall_video("f1.mp4", 200.0, [incident(150.0, 152.0, notes="slow slide from chair")])
     text = render([video], {"f1.mp4": [Detection(5.0, 0.9)]})
 
-    assert "## 6. Missed falls" in text
+    assert "## 8. Missed falls" in text
     assert "slow slide from chair" in text
     assert "150.0s–152.0s" in text
     assert "the alert landed outside the matching window" in text
@@ -282,7 +282,9 @@ def test_a_sweep_row_with_unmeasurable_precision_renders_na_not_zero():
         [fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])], {}, sweep_rows=rows,
     )
 
-    assert "| 0.70 | 1.5 | 0.0% | n/a | n/a | n/a | 1 | 0 |" in text
+    # F1 is n/a too: it is derived from a precision that could not be
+    # computed, and a row omitting the key must not crash the renderer.
+    assert "| 0.70 | 1.5 | 0.0% | n/a | n/a | n/a | n/a | 1 | 0 |" in text
 
 
 # --- provenance -------------------------------------------------------------
@@ -323,3 +325,183 @@ def test_an_empty_corpus_renders_without_crashing():
 
     assert "# Fall detector — video-level validation report" in text
     assert "No fall incidents in this corpus" in text
+
+
+# --- F1, distributions, per-condition and the readiness statement ---------
+
+def conditioned(filename, conditions, incidents=(), category="fall", activity="other", duration=60.0):
+    return AnnotatedVideo(
+        filename=filename, duration_seconds=duration, category=category,
+        incidents=list(incidents), activity=activity, conditions=conditions,
+    )
+
+
+def test_the_headline_table_reports_f1_alongside_precision_and_recall():
+    video = fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])
+    negative = hard_negative()
+    text = render(
+        [video, negative],
+        {
+            "f1.mp4": [Detection(video_time_seconds=11.0, confidence=0.9)],
+            "h1.mp4": [Detection(video_time_seconds=100.0, confidence=0.7)],
+        },
+    )
+
+    assert "| Incident F1 | 0.667 |" in text
+    # And never instead of the two it is derived from.
+    assert "| Incident recall | 100.0% |" in text
+    assert "| Incident precision | 50.0% |" in text
+
+
+def test_an_unmeasurable_f1_renders_as_na():
+    text = render([hard_negative()])
+
+    assert "| Incident F1 | n/a |" in text
+
+
+def test_the_confidence_distribution_section_separates_true_from_false():
+    video = fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])
+    negative = hard_negative()
+    text = render(
+        [video, negative],
+        {
+            "f1.mp4": [Detection(video_time_seconds=11.0, confidence=0.88)],
+            "h1.mp4": [Detection(video_time_seconds=100.0, confidence=0.55)],
+        },
+    )
+
+    assert "## 7. Confidence distributions" in text
+    assert "Detections matching a real fall" in text
+    assert "| 0.80-0.90 | 1 | 0 |" in text
+    assert "| 0.50-0.60 | 0 | 1 |" in text
+
+
+def test_the_report_says_so_when_there_is_no_distribution_to_show():
+    text = render([hard_negative()])
+
+    assert "produced no events on this corpus" in text
+
+
+def test_per_condition_results_are_broken_out_when_conditions_are_labelled():
+    day = conditioned("day.mp4", {"lighting": "daylight"}, [incident(10.0, 12.0, id="d")])
+    night = conditioned("night.mp4", {"lighting": "night_ir"}, [incident(10.0, 12.0, id="n")])
+    text = render(
+        [day, night],
+        {"day.mp4": [Detection(video_time_seconds=11.0, confidence=0.9)], "night.mp4": []},
+    )
+
+    assert "## 6. Per-condition results" in text
+    assert "**Lighting**" in text
+    # The split is the point: a single averaged recall hides the failure.
+    assert "| daylight | 1 | 1 | 0 | 100.0% |" in text
+    assert "| night_ir | 1 | 0 | 1 | 0.0% |" in text
+
+
+def test_per_condition_section_explains_itself_when_nothing_is_labelled():
+    text = render([fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])])
+
+    assert "No clip in this corpus carries a `conditions` block" in text
+    assert "`lighting`" in text
+
+
+def test_recall_is_split_by_fall_direction_and_speed():
+    video = AnnotatedVideo(
+        filename="f1.mp4", duration_seconds=120.0, category="fall",
+        incidents=[
+            Incident(id="fwd", start_seconds=10.0, end_seconds=12.0, direction="forward", speed="fast"),
+            Incident(id="back", start_seconds=80.0, end_seconds=82.0, direction="backward", speed="slow"),
+        ],
+    )
+    text = render([video], {"f1.mp4": [Detection(video_time_seconds=11.0, confidence=0.9)]})
+
+    assert "### Recall by fall type" in text
+    assert "| forward | 1 | 1 | 0 | 100.0% |" in text
+    assert "| backward | 1 | 0 | 1 | 0.0% |" in text
+    assert "cannot be attributed to a fall direction" in text
+
+
+def test_the_report_says_when_falls_are_not_typed():
+    text = render([fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])])
+
+    assert "No incident in this corpus is annotated with a `direction`" in text
+
+
+# --- the validation-readiness statement ----------------------------------
+
+def test_an_incomplete_corpus_carries_the_pending_validation_status():
+    """The statement this whole task turns on. It is generated from the
+    corpus, not written by hand, so it cannot be left behind when the
+    corpus improves - or asserted while it has not."""
+    text = render([fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])])
+
+    assert "Corpus coverage against the target dataset" in text
+    assert "**This corpus does not yet meet it.**" in text
+    assert (
+        "Evaluation framework ready; independent real-world video validation pending "
+        "labelled footage." in text
+    )
+    assert "no claim about this detector's operational accuracy is supported by evidence"
+
+
+def test_the_missing_coverage_table_names_the_specific_gaps():
+    text = render([fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])])
+
+    assert "| Fall directions | `forward`, `backward`, `sideways` |" in text
+    assert "`exercising`" in text
+
+
+def test_a_complete_corpus_drops_the_pending_status():
+    from ml.validation.annotations import (
+        CONDITION_DIMENSIONS,
+        FALL_DIRECTIONS,
+        FALL_SPEEDS,
+        REQUIRED_HARD_NEGATIVES,
+    )
+
+    videos = [
+        conditioned(
+            f"fall_{d}_{s}.mp4", {dim: "a" for dim in CONDITION_DIMENSIONS},
+            [Incident(id=f"{d}-{s}", start_seconds=10.0, end_seconds=12.0, direction=d, speed=s)],
+        )
+        for d in FALL_DIRECTIONS for s in FALL_SPEEDS
+    ] + [
+        conditioned(
+            f"hn_{a}.mp4", {dim: "b" for dim in CONDITION_DIMENSIONS},
+            category="hard_negative", activity=a, duration=1800.0,
+        )
+        for a in REQUIRED_HARD_NEGATIVES
+    ]
+
+    text = render(videos)
+
+    assert "contains at least one example of every fall direction" in text
+    assert "independent real-world video validation pending" not in text
+    # But coverage is necessary, not sufficient - the caveat about sample
+    # size and representativeness must survive.
+    assert "remains a judgement about the footage" in text
+
+
+def test_the_hard_negative_section_reports_a_per_activity_rate():
+    negative = hard_negative("h1.mp4", duration=1800.0, activity="exercising")
+    text = render([negative], {"h1.mp4": [Detection(video_time_seconds=100.0, confidence=0.7)]})
+
+    assert "### False-alert rate by activity" in text
+    # One false alert in half an hour is two per hour.
+    assert "| exercising | 1 | 30.0 min | 1 | 2.00 |" in text
+
+
+def test_the_sweep_table_carries_f1():
+    text = render(
+        [fall_video("f1.mp4", 60.0, [incident(10.0, 12.0)])],
+        {"f1.mp4": [Detection(video_time_seconds=11.0, confidence=0.9)]},
+        sweep_rows=[{
+            "min_confidence": 0.4, "min_sustained_seconds": 0.6,
+            "incident_recall": 1.0, "incident_precision": 1.0, "incident_f1": 1.0,
+            "false_alerts_per_hour": 0.0, "mean_latency_seconds": 1.0,
+            "median_latency_seconds": None, "true_positives": 1, "missed": 0,
+            "false_alerts": 0, "is_current": True,
+        }],
+    )
+
+    assert "| Confidence | Sustained (s) | Incident recall | Precision | F1 |" in text
+    assert "1.000" in text

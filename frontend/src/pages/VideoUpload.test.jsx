@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import VideoUpload from './VideoUpload'
 import apiClient from '../api/client'
+import { pageOf } from '../test/apiFixtures'
 import { useAuthStore } from '../store/authStore'
 import { useToastStore } from '../store/toastStore'
 
@@ -23,7 +24,7 @@ describe('VideoUpload page', () => {
   })
 
   it('shows an empty state when there are no uploads', async () => {
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
     render(<VideoUpload />)
     expect(await screen.findByText(/no videos uploaded yet/i)).toBeInTheDocument()
   })
@@ -42,7 +43,7 @@ describe('VideoUpload page', () => {
 
   it('lists existing uploads with their status and stats', async () => {
     apiClient.get.mockResolvedValueOnce({
-      data: [
+      data: pageOf([
         {
           id: 1,
           original_filename: 'lobby-fall.mp4',
@@ -53,7 +54,7 @@ describe('VideoUpload page', () => {
           file_size_bytes: 1024 * 1024,
           created_at: '2026-01-01T00:00:00Z',
         },
-      ],
+      ]),
     })
     render(<VideoUpload />)
     expect(await screen.findByText('lobby-fall.mp4')).toBeInTheDocument()
@@ -63,7 +64,7 @@ describe('VideoUpload page', () => {
 
   it('uploads a selected video file and adds it to the list', async () => {
     const user = userEvent.setup()
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
     apiClient.post.mockResolvedValueOnce({
       data: {
         id: 42,
@@ -95,7 +96,7 @@ describe('VideoUpload page', () => {
 
   it('surfaces the server\'s rejection reason when an upload fails', async () => {
     const user = userEvent.setup()
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
     apiClient.post.mockRejectedValueOnce({ response: { data: { detail: 'Unsupported file type' } } })
 
     render(<VideoUpload />)
@@ -114,7 +115,7 @@ describe('VideoUpload page', () => {
 
   it('explains a network failure that never reached the server', async () => {
     const user = userEvent.setup()
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
     apiClient.post.mockRejectedValueOnce(new Error('Network Error')) // no `response`
 
     render(<VideoUpload />)
@@ -129,7 +130,7 @@ describe('VideoUpload page', () => {
   })
 
   it('rejects an unsupported file type dropped onto the drop zone', async () => {
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
 
     render(<VideoUpload />)
     await screen.findByText(/no videos uploaded yet/i)
@@ -149,7 +150,7 @@ describe('VideoUpload page', () => {
 
   it('rejects a file over the size limit without uploading it', async () => {
     const user = userEvent.setup()
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
 
     render(<VideoUpload />)
     await screen.findByText(/no videos uploaded yet/i)
@@ -166,7 +167,7 @@ describe('VideoUpload page', () => {
 
   it('blocks a second submission while an upload is still in flight', async () => {
     const user = userEvent.setup()
-    apiClient.get.mockResolvedValueOnce({ data: [] })
+    apiClient.get.mockResolvedValueOnce({ data: pageOf([]) })
     apiClient.post.mockReturnValueOnce(new Promise(() => {})) // never settles
 
     render(<VideoUpload />)
@@ -186,7 +187,7 @@ describe('VideoUpload page', () => {
 
   it('shows why an analysis failed', async () => {
     apiClient.get.mockResolvedValueOnce({
-      data: [
+      data: pageOf([
         {
           id: 9,
           original_filename: 'broken.mp4',
@@ -198,7 +199,7 @@ describe('VideoUpload page', () => {
           file_size_bytes: 2048,
           created_at: '2026-01-01T00:00:00Z',
         },
-      ],
+      ]),
     })
 
     render(<VideoUpload />)
@@ -222,13 +223,13 @@ describe('VideoUpload page', () => {
     it('shows each fall with the confidence the backend actually reported', async () => {
       const user = userEvent.setup()
       apiClient.get.mockImplementation((url) => {
-        if (url === '/api/video-uploads') return Promise.resolve({ data: [COMPLETED_UPLOAD] })
+        if (url === '/api/video-uploads') return Promise.resolve({ data: pageOf([COMPLETED_UPLOAD]) })
         if (url === '/api/recordings') {
-          return Promise.resolve({ data: [{ id: 71, video_upload_id: 5, filename: 'fall.mp4' }] })
+          return Promise.resolve({ data: pageOf([{ id: 71, video_upload_id: 5, filename: 'fall.mp4' }]) })
         }
         if (url === '/api/alerts') {
           return Promise.resolve({
-            data: [
+            data: pageOf([
               {
                 id: 900,
                 video_upload_id: 5,
@@ -237,7 +238,7 @@ describe('VideoUpload page', () => {
                 confidence_score: 0.87,
                 timestamp: '2026-01-01T00:00:05Z',
               },
-            ],
+            ]),
           })
         }
         return Promise.reject(new Error(`unexpected url ${url}`))
@@ -256,7 +257,7 @@ describe('VideoUpload page', () => {
     it('reports a failed results fetch instead of claiming no falls were found', async () => {
       const user = userEvent.setup()
       apiClient.get.mockImplementation((url) => {
-        if (url === '/api/video-uploads') return Promise.resolve({ data: [COMPLETED_UPLOAD] })
+        if (url === '/api/video-uploads') return Promise.resolve({ data: pageOf([COMPLETED_UPLOAD]) })
         return Promise.reject(new Error('boom'))
       })
 
@@ -273,9 +274,9 @@ describe('VideoUpload page', () => {
       const user = userEvent.setup()
       apiClient.get.mockImplementation((url) => {
         if (url === '/api/video-uploads') {
-          return Promise.resolve({ data: [{ ...COMPLETED_UPLOAD, fall_events_count: 0 }] })
+          return Promise.resolve({ data: pageOf([{ ...COMPLETED_UPLOAD, fall_events_count: 0 }]) })
         }
-        if (url === '/api/recordings' || url === '/api/alerts') return Promise.resolve({ data: [] })
+        if (url === '/api/recordings' || url === '/api/alerts') return Promise.resolve({ data: pageOf([]) })
         return Promise.reject(new Error(`unexpected url ${url}`))
       })
 
@@ -290,7 +291,7 @@ describe('VideoUpload page', () => {
     const user = userEvent.setup()
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     apiClient.get.mockResolvedValueOnce({
-      data: [
+      data: pageOf([
         {
           id: 7,
           original_filename: 'to-delete.mp4',
@@ -301,7 +302,7 @@ describe('VideoUpload page', () => {
           file_size_bytes: 100,
           created_at: '2026-01-01T00:00:00Z',
         },
-      ],
+      ]),
     })
     apiClient.delete.mockResolvedValueOnce({})
 

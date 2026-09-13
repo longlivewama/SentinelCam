@@ -61,15 +61,90 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from statistics import median
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
-from .annotations import AnnotatedVideo, Corpus, Incident
+from .annotations import CONDITION_DIMENSIONS, AnnotatedVideo, Corpus, Incident
 
 # See the module docstring for why these are asymmetric.
 PRE_TOLERANCE_SECONDS = 0.5
 POST_TOLERANCE_SECONDS = 30.0
 
 SECONDS_PER_HOUR = 3600.0
+
+# Buckets for the confidence histogram. The production floor is 0.40, so
+# the edges straddle it: what matters operationally is whether true and
+# false detections separate around the threshold, not their shape at the
+# extremes.
+CONFIDENCE_BINS = (0.0, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+
+
+def f1_score(precision: Optional[float], recall: Optional[float]) -> Optional[float]:
+    """Harmonic mean, or None when either input is un-measurable.
+
+    None rather than 0.0, for the same reason precision and recall are:
+    a corpus with no falls in it has no F1, and printing 0.0 would read as
+    total failure rather than "not measured"."""
+    if precision is None or recall is None:
+        return None
+    if precision + recall == 0:
+        return 0.0
+    return 2 * precision * recall / (precision + recall)
+
+
+@dataclass(frozen=True)
+class GroupResult:
+    """Incident-level counts for one slice of the corpus - one lighting
+    condition, one fall direction, one activity. Carries its own n so a
+    reader cannot quote a rate without seeing how thin it is."""
+
+    label: str
+    true_positives: int
+    false_negatives: int
+    false_positives: int
+    videos: int
+    duration_seconds: float
+
+    @property
+    def total_incidents(self) -> int:
+        return self.true_positives + self.false_negatives
+
+    @property
+    def recall(self) -> Optional[float]:
+        if self.total_incidents == 0:
+            return None
+        return self.true_positives / self.total_incidents
+
+    @property
+    def precision(self) -> Optional[float]:
+        denominator = self.true_positives + self.false_positives
+        if denominator == 0:
+            return None
+        return self.true_positives / denominator
+
+    @property
+    def f1(self) -> Optional[float]:
+        return f1_score(self.precision, self.recall)
+
+    @property
+    def false_alerts_per_hour(self) -> Optional[float]:
+        if self.duration_seconds <= 0:
+            return None
+        return self.false_positives / (self.duration_seconds / SECONDS_PER_HOUR)
+
+    def as_dict(self) -> dict:
+        return {
+            "label": self.label,
+            "videos": self.videos,
+            "duration_seconds": round(self.duration_seconds, 2),
+            "true_positives": self.true_positives,
+            "false_negatives": self.false_negatives,
+            "false_positives": self.false_positives,
+            "total_incidents": self.total_incidents,
+            "recall": self.recall,
+            "precision": self.precision,
+            "f1": self.f1,
+            "false_alerts_per_hour": self.false_alerts_per_hour,
+        }
 
 
 @dataclass(frozen=True)
@@ -175,6 +250,18 @@ class EvaluationSummary:
             return None
         return self.true_positives / denominator
 
+    @property
+    def incident_f1(self) -> Optional[float]:
+        """The single number for comparing threshold settings.
+
+        Reported alongside precision and recall, never instead of them:
+        for this product they are not interchangeable. A missed fall is
+        someone lying on a floor unnoticed; a false alert is an operator
+        checking a camera for nothing. F1 weights them equally, which is
+        a convenience for ranking configurations, not a statement that
+        the two errors cost the same."""
+        return f1_score(self.incident_precision, self.incident_recall)
+
     # -- operational ----------------------------------------------------
 
     @property
@@ -270,6 +357,133 @@ class EvaluationSummary:
                 })
         return sorted(rows, key=lambda r: (r["video"], r["video_time_seconds"]))
 
+    # -- confidence distributions ---------------------------------------
+
+    def _confidence_stats(self, values: Sequence[float]) -> dict:
+        ordered = sorted(values)
+        if not ordered:
+            return {"n": 0, "min": None, "median": None, "mean": None, "max": None}
+        return {
+            "n": len(ordered),
+            "min": round(ordered[0], 3),
+            "median": round(median(ordered), 3),
+            "mean": round(sum(ordered) / len(ordered), 3),
+            "max": round(ordered[-1], 3),
+        }
+
+    def _histogram(self, values: Sequence[float]) -> Dict[str, int]:
+        """Counts per CONFIDENCE_BINS bucket, labelled by their edges."""
+        counts: Dict[str, int] = {}
+        for low, high in zip(CONFIDENCE_BINS, CONFIDENCE_BINS[1:]):
+            label = f"{low:.2f}-{high:.2f}"
+            # Half-open except at the top, so 1.0 lands in the last bucket
+            # rather than falling off the end.
+            counts[label] = sum(
+                1 for v in values
+                if low <= v < high or (high == CONFIDENCE_BINS[-1] and v == high)
+            )
+        return counts
+
+    def confidence_distribution(self) -> dict:
+        """How confident the detector was when it was right, versus when it
+        was wrong.
+
+        This is the diagnostic the threshold sweep cannot give on its own.
+        A sweep says what happens at each threshold; this says WHY - if
+        true and false detections overlap heavily, no threshold separates
+        them and the fix is the model or the sustain gate, not the number.
+        If they separate cleanly, the sweep's best row is a real operating
+        point rather than an artefact of a small corpus."""
+        true_positive_confidences = [
+            m.detection.confidence for r in self.results for m in r.matched
+        ]
+        false_alert_confidences = [
+            d.confidence for r in self.results for d in r.false_alerts
+        ]
+        return {
+            "true_positives": {
+                **self._confidence_stats(true_positive_confidences),
+                "histogram": self._histogram(true_positive_confidences),
+            },
+            "false_alerts": {
+                **self._confidence_stats(false_alert_confidences),
+                "histogram": self._histogram(false_alert_confidences),
+            },
+            "bins": list(CONFIDENCE_BINS),
+        }
+
+    # -- per-condition / per-taxonomy breakdowns --------------------------
+
+    def _group_videos(self, key: Callable[[VideoResult], str]) -> List[GroupResult]:
+        """Groups whole videos, so both recall and false-alert rate are
+        meaningful within a group (a false alert belongs to the clip it
+        fired in, not to any particular incident)."""
+        buckets: Dict[str, List[VideoResult]] = {}
+        for result in self.results:
+            buckets.setdefault(key(result), []).append(result)
+
+        groups = [
+            GroupResult(
+                label=label,
+                true_positives=sum(len(r.matched) for r in rows),
+                false_negatives=sum(len(r.missed) for r in rows),
+                false_positives=sum(len(r.false_alerts) for r in rows),
+                videos=len(rows),
+                duration_seconds=sum(r.video.duration_seconds for r in rows),
+            )
+            for label, rows in buckets.items()
+        ]
+        return sorted(groups, key=lambda g: g.label)
+
+    def by_condition(self, dimension: str) -> List[GroupResult]:
+        """Results split by one recording condition - lighting, camera
+        angle, distance, occlusion or resolution.
+
+        A single overall recall hides exactly what an installer needs: a
+        detector that works in daylight at 3 m and fails at night at 8 m
+        has the same headline number as one that works everywhere."""
+        return self._group_videos(lambda r: r.video.condition(dimension))
+
+    def by_all_conditions(self) -> Dict[str, List[GroupResult]]:
+        return {dimension: self.by_condition(dimension) for dimension in CONDITION_DIMENSIONS}
+
+    def _group_incidents(self, key: Callable[[Incident], str]) -> List[GroupResult]:
+        """Groups individual incidents. Only recall is defined here: a
+        false alert cannot be attributed to a fall direction, because no
+        fall happened."""
+        buckets: Dict[str, List[bool]] = {}
+        for result in self.results:
+            for matched in result.matched:
+                buckets.setdefault(key(matched.incident), []).append(True)
+            for missed in result.missed:
+                buckets.setdefault(key(missed), []).append(False)
+
+        groups = [
+            GroupResult(
+                label=label,
+                true_positives=sum(1 for hit in hits if hit),
+                false_negatives=sum(1 for hit in hits if not hit),
+                false_positives=0,
+                videos=0,
+                duration_seconds=0.0,
+            )
+            for label, hits in buckets.items()
+        ]
+        return sorted(groups, key=lambda g: g.label)
+
+    def by_fall_direction(self) -> List[GroupResult]:
+        return self._group_incidents(lambda i: i.direction or "unlabelled")
+
+    def by_fall_speed(self) -> List[GroupResult]:
+        return self._group_incidents(lambda i: i.speed or "unlabelled")
+
+    def by_hard_negative_activity(self) -> List[GroupResult]:
+        """False-alert rate per ordinary activity - the ranked list of what
+        actually confuses the detector."""
+        return self._group_videos(
+            lambda r: r.video.activity if r.video.is_hard_negative else "fall_clip"
+        )
+
     def missed_fall_details(self) -> List[dict]:
         rows = []
         for result in self.results:
@@ -280,6 +494,8 @@ class EvaluationSummary:
                     "start_seconds": round(incident.start_seconds, 2),
                     "end_seconds": round(incident.end_seconds, 2),
                     "detections_in_video": len(result.detections),
+                    "direction": incident.direction,
+                    "speed": incident.speed,
                     "notes": incident.notes,
                 })
         return sorted(rows, key=lambda r: (r["video"], r["start_seconds"]))

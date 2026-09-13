@@ -37,11 +37,15 @@ def test_list_and_filter_alerts(client, viewer_headers, db):
 
     all_alerts = client.get("/api/alerts", headers=viewer_headers)
     assert all_alerts.status_code == 200
-    assert len(all_alerts.json()) == 2
+    assert len(all_alerts.json()["items"]) == 2
+    assert all_alerts.json()["total"] == 2
 
     falls_only = client.get("/api/alerts", params={"event_type": "fall"}, headers=viewer_headers)
-    assert len(falls_only.json()) == 1
-    assert falls_only.json()[0]["event_type"] == "fall"
+    assert len(falls_only.json()["items"]) == 1
+    assert falls_only.json()["items"][0]["event_type"] == "fall"
+    # The filter narrows the count too - a filtered page that reported the
+    # unfiltered total would give the UI the wrong number of pages.
+    assert falls_only.json()["total"] == 1
 
 
 def test_viewer_cannot_acknowledge_alert(client, viewer_headers, db):

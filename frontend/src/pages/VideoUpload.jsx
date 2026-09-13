@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import apiClient, { API_URL } from '../api/client'
+import apiClient from '../api/client'
+import MediaVideo from '../components/MediaVideo'
 import Modal from '../components/Modal'
-import { useAuthStore } from '../store/authStore'
+import Pagination from '../components/Pagination'
 import { toast } from '../store/toastStore'
 import { onRealtimeEvent } from '../lib/realtime'
 import { detectorMeta, formatBytes, formatDateTime, formatVideoTimestamp } from '../lib/format'
@@ -26,6 +27,7 @@ const STATUS_HINTS = {
 // Statuses the backend can still move away from on its own; while any
 // upload is in one of these we keep asking the server for fresh state.
 const ACTIVE_STATUSES = ['pending', 'processing']
+const PAGE_SIZE = 20
 const POLL_INTERVAL_MS = 3000
 // Tolerate a couple of blips before telling the user live updates are off.
 const POLL_FAILURES_BEFORE_WARNING = 3
@@ -34,54 +36,7 @@ function isActive(upload) {
   return ACTIVE_STATUSES.includes(upload.status)
 }
 
-// A <video> that reports failure instead of rendering an empty black box.
-//
-// This exists because of a real incident: fall clips were being encoded as
-// MPEG-4 Part 2 ("mp4v"), which no current browser can decode, while the
-// H.264 source video played fine. The backend was healthy - the rows were
-// right, the clips were on disk, and the range endpoint returned 206 - so
-// the only symptom anyone could see was a silent blank player, which reads
-// as "the results didn't load" rather than "this file can't be played".
-//
-// The encoder side is fixed (see recording_engine.open_writer's codec
-// ladder), but a player that fails silently will make the NEXT codec or
-// storage problem just as hard to recognise, so it now says so.
-function ClipVideo({ src, videoRef, className = 'w-full rounded-lg bg-black' }) {
-  const [failed, setFailed] = useState(false)
-
-  // A new source deserves a fresh attempt - otherwise one bad clip would
-  // leave the player permanently marked as broken.
-  useEffect(() => {
-    setFailed(false)
-  }, [src])
-
-  if (failed) {
-    return (
-      <div className="rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-red-300">
-        <p className="font-medium">This video could not be played.</p>
-        <p className="mt-1 text-red-300/80">
-          The file may be missing, or encoded in a format this browser cannot decode.
-        </p>
-      </div>
-    )
-  }
-
-  return (
-    <video
-      ref={videoRef}
-      controls
-      preload="metadata"
-      className={className}
-      src={src}
-      onError={() => setFailed(true)}
-    >
-      Your browser does not support the video tag.
-    </video>
-  )
-}
-
 function UploadDetailModal({ upload, onClose }) {
-  const token = useAuthStore((s) => s.token)
   const sourceVideoRef = useRef(null)
   const [recordings, setRecordings] = useState([])
   const [fallEvents, setFallEvents] = useState([])
@@ -97,13 +52,17 @@ function UploadDetailModal({ upload, onClose }) {
         // The per-fall confidence scores live on the event rows, the
         // playable clips on the recording rows; both are keyed by this
         // upload, so fetch them together and pair them up below.
+        // One upload's own results, so a single generous page rather than
+        // paging: a video with more than 100 detected falls is not a
+        // browsing problem, it is a footage problem.
+        const params = { video_upload_id: upload.id, page_size: 100 }
         const [recordingsRes, eventsRes] = await Promise.all([
-          apiClient.get('/api/recordings', { params: { video_upload_id: upload.id } }),
-          apiClient.get('/api/alerts', { params: { video_upload_id: upload.id, event_type: 'fall' } }),
+          apiClient.get('/api/recordings', { params }),
+          apiClient.get('/api/alerts', { params: { ...params, event_type: 'fall' } }),
         ])
         if (cancelled) return
-        setRecordings(recordingsRes.data)
-        setFallEvents(eventsRes.data)
+        setRecordings(recordingsRes.data.items)
+        setFallEvents(eventsRes.data.items)
       } catch {
         if (cancelled) return
         // Must not fall through to the "no falls detected" branch - a
@@ -119,8 +78,6 @@ function UploadDetailModal({ upload, onClose }) {
       cancelled = true
     }
   }, [upload.id])
-
-  const sourceVideoUrl = `${API_URL}/api/video-uploads/${upload.id}/video?token=${token}`
 
   // Jump the source player to where in the footage a fall was detected.
   // This is the whole point of persisting an in-video offset: an operator
@@ -187,7 +144,7 @@ function UploadDetailModal({ upload, onClose }) {
 
       <div className="mb-4">
         <p className="sc-label mb-2">Source video</p>
-        <ClipVideo videoRef={sourceVideoRef} src={sourceVideoUrl} />
+        <MediaVideo kind="upload" id={upload.id} videoRef={sourceVideoRef} />
       </div>
 
       <p className="sc-label mb-2">Fall event clips</p>
@@ -254,9 +211,7 @@ function UploadDetailModal({ upload, onClose }) {
                   Analysed {formatDateTime(event.timestamp)}
                 </p>
                 {recording ? (
-                  <ClipVideo
-                    src={`${API_URL}/api/recordings/${recording.id}/video?token=${token}`}
-                  />
+                  <MediaVideo kind="recording" id={recording.id} />
                 ) : (
                   <p className="text-xs text-slate-500">No clip was saved for this event.</p>
                 )}
@@ -264,10 +219,7 @@ function UploadDetailModal({ upload, onClose }) {
             )
           })}
           {unpairedRecordings.map((rec) => (
-            <ClipVideo
-              key={rec.id}
-              src={`${API_URL}/api/recordings/${rec.id}/video?token=${token}`}
-            />
+            <MediaVideo key={rec.id} kind="recording" id={rec.id} />
           ))}
         </div>
       )}
@@ -285,6 +237,8 @@ export default function VideoUpload() {
   const [viewingUpload, setViewingUpload] = useState(null)
   const [dragActive, setDragActive] = useState(false)
   const [pollFailures, setPollFailures] = useState(0)
+  const [pageInfo, setPageInfo] = useState({ page: 1, pages: 0, total: 0 })
+  const [page, setPage] = useState(1)
 
   // Every list request gets a sequence number and only the newest one is
   // allowed to write to state. Without this a slow in-flight response can
@@ -296,9 +250,12 @@ export default function VideoUpload() {
     const seq = (requestSeq.current += 1)
     if (showSpinner) setLoading(true)
     try {
-      const { data } = await apiClient.get('/api/video-uploads')
+      const { data } = await apiClient.get('/api/video-uploads', {
+        params: { page, page_size: PAGE_SIZE },
+      })
       if (seq !== requestSeq.current) return
-      setUploads(data)
+      setUploads(data.items)
+      setPageInfo({ page: data.page, pages: data.pages, total: data.total })
       setPollFailures(0)
       if (!background) setError('')
     } catch {
@@ -313,7 +270,7 @@ export default function VideoUpload() {
     } finally {
       if (showSpinner) setLoading(false)
     }
-  }, [])
+  }, [page])
 
   useEffect(() => {
     loadUploads({ showSpinner: true })
@@ -375,11 +332,17 @@ export default function VideoUpload() {
           },
         })
         toast.success('Video uploaded. Analysis started.')
-        // Show it immediately, then reconcile - the refetch also bumps the
-        // sequence, so the initial list request (which may still be in
-        // flight and predates this upload) can no longer overwrite it.
-        setUploads((prev) => [data, ...prev])
-        loadUploads({ background: true })
+        // A new upload sorts to the top of page 1, so showing it optimistically
+        // is only correct there; from a later page, jump back instead.
+        if (page === 1) {
+          // Show it immediately, then reconcile - the refetch also bumps the
+          // sequence, so the initial list request (which may still be in
+          // flight and predates this upload) can no longer overwrite it.
+          setUploads((prev) => [data, ...prev])
+          loadUploads({ background: true })
+        } else {
+          setPage(1)
+        }
       } catch (err) {
         const detail = err?.response?.data?.detail
         if (detail) {
@@ -395,7 +358,7 @@ export default function VideoUpload() {
         if (fileInputRef.current) fileInputRef.current.value = ''
       }
     },
-    [uploading, loadUploads],
+    [uploading, loadUploads, page],
   )
 
   const handleDelete = async (upload) => {
@@ -531,6 +494,16 @@ export default function VideoUpload() {
           ))}
         </div>
       )}
+
+      <Pagination
+        page={pageInfo.page}
+        pages={pageInfo.pages}
+        total={pageInfo.total}
+        pageSize={PAGE_SIZE}
+        onChange={setPage}
+        busy={loading}
+        noun="uploads"
+      />
 
       {viewingUpload && (
         <UploadDetailModal

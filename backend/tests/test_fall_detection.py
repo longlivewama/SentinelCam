@@ -4,6 +4,7 @@ false-positive fix described in fall_detection.py's module docstring).
 """
 from app.services.detection.fall_detection import (
     FALL_DEBOUNCE_SECONDS,
+    FALL_MIN_CONSECUTIVE_FRAMES,
     FALL_MIN_SUSTAINED_SECONDS,
     FallDetector,
     PersonDetection,
@@ -75,6 +76,26 @@ def test_sustained_fall_fires_exactly_once_then_debounces():
     # fire again.
     more_events = detector.update([_fallen_person()], now=fired_at + (FALL_DEBOUNCE_SECONDS - 1))
     assert more_events == []
+
+
+def test_sustained_duration_alone_is_not_enough_without_enough_qualifying_frames():
+    """Confirmation requires FALL_MIN_CONSECUTIVE_FRAMES distinct on-ground
+    frames for the same person, not just FALL_MIN_SUSTAINED_SECONDS of
+    elapsed wall-clock time - the two normally move together, but must be
+    checked independently in case processing ever runs unusually slowly."""
+    detector = FallDetector()
+    assert FALL_MIN_CONSECUTIVE_FRAMES >= 3  # the assertions below assume this
+
+    events = []
+    # Only 2 on-ground frames, but spread out enough in wall-clock time to
+    # already clear FALL_MIN_SUSTAINED_SECONDS on their own.
+    events += detector.update([_fallen_person()], now=0.0)
+    events += detector.update([_fallen_person()], now=FALL_MIN_SUSTAINED_SECONDS + 0.1)
+    assert events == []
+
+    # A 3rd on-ground frame - now both gates clear.
+    events += detector.update([_fallen_person()], now=FALL_MIN_SUSTAINED_SECONDS + 0.2)
+    assert len(events) == 1
 
 
 def test_fall_can_fire_again_after_debounce_and_recovery():
