@@ -72,7 +72,10 @@ class FallPipeline:
             FallDetector() if self.mode in (MODE_HEURISTIC, MODE_HYBRID) else None
         )
         self._model_gate = (
-            ModelFallDetector(min_sustained_seconds=settings.FALL_DETECTOR_MIN_SUSTAINED_SECONDS)
+            ModelFallDetector(
+                min_sustained_seconds=settings.FALL_DETECTOR_MIN_SUSTAINED_SECONDS,
+                min_consecutive_frames=settings.FALL_DETECTOR_MIN_CONSECUTIVE_FRAMES,
+            )
             if self.mode in (MODE_MODEL, MODE_HYBRID)
             else None
         )

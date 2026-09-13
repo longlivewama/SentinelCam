@@ -178,6 +178,16 @@ class Settings(BaseSettings):
     # single bad frame cannot raise an alert.
     FALL_DETECTOR_MIN_SUSTAINED_SECONDS: float = 0.6
 
+    # Minimum number of DISTINCT consecutive processed frames (not just
+    # elapsed wall-clock time) the same track must be matched on before an
+    # event fires, alongside FALL_DETECTOR_MIN_SUSTAINED_SECONDS above.
+    # Duration alone is normally plenty (at the default stream/stride
+    # settings, 0.6s is ~6 processed frames) - this only closes the edge
+    # case where inference runs unusually slowly and a couple of matched
+    # frames could otherwise span the sustained-seconds window on their
+    # own. See fall_detection.py's gates for how the two combine.
+    FALL_DETECTOR_MIN_CONSECUTIVE_FRAMES: int = 3
+
     # Upper bound on video-upload analyses running at once. Each one
     # decodes a video and runs inference on a background thread, so
     # unbounded concurrency is a straightforward way to exhaust CPU and
@@ -186,8 +196,17 @@ class Settings(BaseSettings):
 
     # --- Streaming / recording ---
     STREAM_FPS: int = 30
-    ROLLING_BUFFER_FRAMES: int = 90
-    POST_EVENT_SECONDS: int = 3
+
+    # How much footage a live-camera event clip spans on each side of the
+    # moment it fired: PRE_EVENT_SECONDS from the rolling pre-event buffer
+    # (see stream_manager.CameraStream) plus POST_EVENT_SECONDS collected
+    # live afterwards (see recording_engine.trigger_event). Kept as two
+    # plain seconds values, symmetric with each other, rather than a raw
+    # frame count for the pre-event side - the frame count is still what
+    # the buffer is sized in internally (PRE_EVENT_SECONDS * STREAM_FPS),
+    # but nothing outside stream_manager needs to know that.
+    PRE_EVENT_SECONDS: int = 5
+    POST_EVENT_SECONDS: int = 5
 
     # How often (in frames) to run the detection pipeline. Running every
     # frame is unnecessarily expensive on CPU; every 2nd/3rd frame keeps

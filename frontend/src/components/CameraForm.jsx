@@ -93,31 +93,22 @@ export default function CameraForm({
       </div>
 
       {showStatusFields && (
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label htmlFor="camera-form-status" className="sc-label">Status</label>
-            <select
-              id="camera-form-status"
-              className="sc-input"
-              value={values.status}
-              onChange={(e) => update('status', e.target.value)}
-            >
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-              <option value="error">Error</option>
-            </select>
-          </div>
-          <div className="flex items-end pb-2">
-            <label className="flex items-center gap-2 text-sm text-slate-300">
-              <input
-                type="checkbox"
-                checked={values.is_active}
-                onChange={(e) => update('is_active', e.target.checked)}
-                className="h-4 w-4 rounded border-surface-600 bg-surface-800 text-accent-cyan focus:ring-accent-cyan"
-              />
-              Camera Active
-            </label>
-          </div>
+        // Camera on/off has its own dedicated toggle on the camera detail
+        // page (right above this form's launch point) - not duplicated
+        // here. This field is connection health, reported automatically
+        // by the capture loop, not something to hand-edit alongside it.
+        <div>
+          <label htmlFor="camera-form-status" className="sc-label">Connection Status</label>
+          <select
+            id="camera-form-status"
+            className="sc-input"
+            value={values.status}
+            onChange={(e) => update('status', e.target.value)}
+          >
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+            <option value="error">Error</option>
+          </select>
         </div>
       )}
 

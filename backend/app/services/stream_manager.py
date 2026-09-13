@@ -52,7 +52,11 @@ class CameraStream:
         self._lock = threading.Lock()
         self._latest_jpeg: Optional[bytes] = None
         self._latest_frame = None  # raw ndarray, most recently captured
-        self._frame_buffer = deque(maxlen=settings.ROLLING_BUFFER_FRAMES)
+        # Sized in frames from settings.PRE_EVENT_SECONDS - see
+        # recording_engine.py's module docstring for how this buffer is
+        # consumed once an event fires.
+        buffer_frames = max(1, int(settings.PRE_EVENT_SECONDS * settings.STREAM_FPS))
+        self._frame_buffer = deque(maxlen=buffer_frames)
 
         self._running = False
         self._thread: Optional[threading.Thread] = None

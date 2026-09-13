@@ -2,10 +2,9 @@
 Rolling-buffer + event-triggered clip writer.
 
 The capture loop in stream_manager.CameraStream continuously maintains a
-rolling deque of the last ROLLING_BUFFER_FRAMES raw frames per camera
-(roughly ROLLING_BUFFER_FRAMES / STREAM_FPS seconds of pre-event footage,
-e.g. 90 frames / 30fps = 3s). When detection/engine.py reports an event,
-this module:
+rolling deque of raw frames per camera sized for PRE_EVENT_SECONDS of
+pre-event footage (PRE_EVENT_SECONDS * STREAM_FPS frames, e.g. 5s * 30fps
+= 150 frames). When detection/engine.py reports an event, this module:
 
   1. Snapshots the current buffer (pre-event frames).
   2. Keeps collecting live frames from the stream for POST_EVENT_SECONDS
