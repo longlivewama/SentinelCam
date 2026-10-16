@@ -6,7 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.core import rate_limit
-from app.core.http_hardening import SecurityHeadersMiddleware, unhandled_exception_handler
+from app.core.http_hardening import (
+    RequestBodyLimitMiddleware,
+    SecurityHeadersMiddleware,
+    unhandled_exception_handler,
+)
 from app.core.logging_utils import install_log_redaction
 from app.database import Base, SessionLocal, engine
 import app.models  # noqa: F401 - ensures all models are registered on Base.metadata
@@ -37,6 +41,17 @@ app = FastAPI(
     docs_url="/docs" if _DOCS_ENABLED else None,
     redoc_url="/redoc" if _DOCS_ENABLED else None,
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
+
+# Innermost of the three (added first), so an early 413 still passes
+# through CORS and gets its headers - otherwise the browser reports a CORS
+# failure instead of "file too large". The slack above the upload limit
+# covers the multipart boundary and part headers around the file itself;
+# the upload route still enforces the exact limit on the file's bytes.
+REQUEST_BODY_SLACK_BYTES = 1024 * 1024
+app.add_middleware(
+    RequestBodyLimitMiddleware,
+    max_body_bytes=settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 + REQUEST_BODY_SLACK_BYTES,
 )
 
 # Never "*": credentials are allowed on these requests, and the browser

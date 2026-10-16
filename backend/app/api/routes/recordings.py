@@ -159,15 +159,15 @@ def delete_recording(
     operator: User = Depends(require_operator),
 ):
     recording = _get_recording_or_404(recording_id, db, operator)
-    file_path = recording.file_path
 
-    stage_delete_recording(db, recording)
+    paths = stage_delete_recording(db, recording)
     db.commit()
 
-    if os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-        except OSError:
-            pass
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     return None

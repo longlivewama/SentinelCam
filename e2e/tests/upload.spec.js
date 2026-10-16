@@ -39,7 +39,12 @@ test.describe('Video upload and analysis', () => {
 
     await row.getByRole('button', { name: 'View' }).click()
     await expect(page.getByText('Persons detected')).toBeVisible()
-    await expect(page.locator('video').first()).toBeVisible()
+    // The fixture is MPEG-4 Part 2 ("FMP4"), which Chromium cannot decode,
+    // so the source player must say so rather than sit there blank. This
+    // used to assert a bare <video> was visible - which only held because
+    // MediaVideo's retry re-minted a byte-identical token and never
+    // surfaced the failure (see MediaVideo.jsx).
+    await expect(page.getByText('This video could not be played.')).toBeVisible()
     await expect(page.getByText('No fall events detected.')).toBeVisible()
   })
 

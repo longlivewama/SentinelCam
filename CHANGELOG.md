@@ -23,6 +23,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Trained YOLOv8n fall detector as the primary fall signal.** `ml/exported/fall_detector_v1.pt`
+  (single class `Fall`, trained by `ml/detector/`) is committed with its metadata and loaded by
+  default; the pose heuristic remains as a reported fallback. Metrics and limitations are in
+  `ml/MODEL_CARD.md`.
 - **Fall clips are annotated with the tracked person who fell.** Every fall clip an uploaded video
   produces now carries a bounding box that follows its subject frame by frame, labelled
   `FALL DETECTED` with the track id and the event's own confidence (`ID 1 | 0.74`). A short-term
@@ -59,11 +63,33 @@ All notable changes to this project are documented here. The format is based on
   Clip encoding runs inline in the upload analyser and was ~70% of its wall clock: a real 29 s
   video went from 77.6 s to 36.3 s end to end, **53% faster with identical detection output**.
 
-### In progress
+### Fixed
 
-- Training a single-class YOLOv8n `Fall` object detector on a prepared fall-detection dataset, to
-  sit alongside the existing pose heuristic. Source code for the download, analysis, preparation
-  and training steps lives in `ml/detector/`; the resulting weights are not distributed here.
+- **Live camera views no longer exhaust the database pool.** `GET /api/cameras/{id}/stream` kept
+  its request's database session checked out for the life of the stream, so about 15 concurrent
+  views took the whole SQLAlchemy pool and every database-backed endpoint hung. The stream now
+  releases its connection before streaming, yields from an async generator, and ends when the
+  viewer disconnects — including on a camera that never produces a frame, which previously looped
+  forever and blocked graceful shutdown. `SecurityHeadersMiddleware` is now pure ASGI, because
+  `BaseHTTPMiddleware` hid that disconnect from the stream.
+- **Oversized uploads are refused while they arrive.** The 500 MB limit was checked only after
+  the multipart body had been spooled to disk in full. A new `RequestBodyLimitMiddleware` rejects
+  a declared `Content-Length` over the limit immediately and cuts off a chunked body at the limit.
+- **Deleting a user who owns analysed uploads no longer fails with a 500.** The staged upload
+  deletes are flushed before the user row, so the `video_uploads.user_id` foreign key is satisfied.
+  Their per-upload clip directories are now removed too.
+- **Snapshots are deleted with their clips.** Snapshot JPEGs outlived their upload, recording,
+  user and the retention script. Writers and deleters now share `snapshot_path_for_clip`.
+- **Editing a running camera's URL takes effect immediately.** The capture thread kept retrying
+  the old URL until the process restarted.
+- **Unplayable videos report the failure.** The player's retry re-minted a media token within the
+  same second, received a byte-identical token, and never reloaded — leaving a silent blank
+  player instead of the "could not be played" message.
+
+### Documentation
+
+- Rewrote the README around the verified implementation, with genuine application screenshots,
+  an architecture diagram and current test results; documented safe E2E isolation.
 
 ## [0.2.0] — 2026-09-07
 

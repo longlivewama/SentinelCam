@@ -39,7 +39,7 @@ from app.models.video_upload import (
     STATUS_PROCESSING,
     VideoUpload,
 )
-from app.services.cascade_delete import remove_upload_clip_dir, stage_delete_video_upload
+from app.services.cascade_delete import remove_upload_clip_dir, snapshot_path_for_clip, stage_delete_video_upload
 from app.services.detection.annotated_clip_renderer import iter_annotated_frames
 from app.services.detection.engine import detection_engine
 from app.services.detection.fall_annotation import FallClipAnnotator
@@ -534,10 +534,9 @@ def _write_upload_clip(
     file_size = file_path.stat().st_size if file_path.exists() else 0
     duration_seconds = len(frames) / fps_int
 
-    snapshot_dir = Path(settings.SNAPSHOTS_DIR)
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_filename = f"upload{video_upload_id}_{ts_str}_fall.jpg"
-    snapshot_path = snapshot_dir / snapshot_filename
+    # Named through cascade_delete so deleting the upload finds it again.
+    snapshot_path = snapshot_path_for_clip(filename, video_upload_id=video_upload_id)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(snapshot_path), mid_frame)
 
     logger.info(

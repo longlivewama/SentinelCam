@@ -102,3 +102,43 @@ def test_deleting_user_with_uploads_and_acknowledged_alerts_does_not_500(
     assert refreshed_event is not None
     assert refreshed_event.acknowledged is True
     assert refreshed_event.acknowledged_by is None
+
+
+def test_deleting_the_owner_of_analysed_uploads_removes_them(client, admin_headers, viewer_user, db, tmp_path):
+    """The test above deletes a user who owns no uploads, so it never
+    reached the cascade it is named after. Deleting the owner of finished
+    analyses - uploads with recordings and fall events - used to 500 with
+    a video_uploads.user_id FK violation, because nothing ordered the
+    staged upload deletes before the user's own."""
+    from datetime import datetime, timezone
+
+    from app.models.event import Event
+    from app.models.recording import Recording
+    from app.models.user import User
+    from app.models.video_upload import VideoUpload
+
+    for index in range(3):
+        upload = VideoUpload(
+            user_id=viewer_user.id, original_filename=f"{index}.mp4",
+            stored_path=str(tmp_path / f"{index}.mp4"), status="completed",
+        )
+        db.add(upload)
+        db.flush()
+        recording = Recording(
+            video_upload_id=upload.id, filename=f"{index}_fall.mp4", file_path=str(tmp_path / f"{index}_fall.mp4"),
+            trigger_action="fall", event_timestamp=datetime.now(timezone.utc),
+        )
+        db.add(recording)
+        db.flush()
+        db.add(Event(video_upload_id=upload.id, recording_id=recording.id, event_type="fall"))
+    db.commit()
+    user_id = viewer_user.id
+
+    resp = client.delete(f"/api/admin/users/{user_id}", headers=admin_headers)
+    assert resp.status_code == 204
+
+    db.expire_all()
+    assert db.query(User).filter(User.id == user_id).count() == 0
+    assert db.query(VideoUpload).filter(VideoUpload.user_id == user_id).count() == 0
+    assert db.query(Recording).filter(Recording.video_upload_id.isnot(None)).count() == 0
+    assert db.query(Event).filter(Event.video_upload_id.isnot(None)).count() == 0

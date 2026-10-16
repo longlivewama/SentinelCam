@@ -53,11 +53,6 @@ class RealtimeBroadcaster:
     def bind_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
 
-    @property
-    def connection_count(self) -> int:
-        with self._lock:
-            return len(self._subscribers)
-
     async def connect(self, websocket: WebSocket, user_id: int, is_operator: bool) -> Subscriber:
         await websocket.accept()
         subscriber = Subscriber(websocket=websocket, user_id=user_id, is_operator=is_operator)

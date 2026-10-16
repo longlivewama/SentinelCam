@@ -176,8 +176,16 @@ class StreamManager:
         self._lock = threading.Lock()
 
     def get_or_create(self, camera_id: int, url: str) -> CameraStream:
+        """The running stream for `camera_id`, (re)started if there is
+        none, it has died, or it is capturing from a different URL than
+        `url` - i.e. the camera was edited while running. Without that
+        last case an edited URL never took effect: the old capture thread
+        retries the old address forever and is always "alive"."""
         with self._lock:
             stream = self._streams.get(camera_id)
+            if stream is not None and stream.is_alive and stream.url != url:
+                stream.stop()
+                stream = None
             if stream is None or not stream.is_alive:
                 stream = CameraStream(camera_id, url)
                 self._streams[camera_id] = stream
@@ -187,11 +195,6 @@ class StreamManager:
     def get(self, camera_id: int) -> Optional[CameraStream]:
         with self._lock:
             return self._streams.get(camera_id)
-
-    def stop_all(self):
-        with self._lock:
-            for stream in self._streams.values():
-                stream.stop()
 
 
 stream_manager = StreamManager()

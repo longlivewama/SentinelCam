@@ -34,9 +34,11 @@ over REST or the WebSocket), the password-reset flow, file upload handling, path
 media serving, SQL injection, injection into the notification pipeline, the WebSocket
 authentication path, and secrets handling in the Docker Compose configuration.
 
-**Out of scope:** the two dependency advisories already documented as accepted risks in the README
-(`ecdsa`, reachable only through ECDSA JWT algorithms this app never uses, and `pyasn1`, pinned by
-`python-jose`'s own constraint); missing hardening on the intentionally permissive local
+**Out of scope:** the dependency advisories already documented as accepted risks in the README
+(`ecdsa`, reachable only through ECDSA JWT algorithms this app never uses; `pyasn1`, pinned by
+`python-jose`'s own constraint; and `python-jose` GHSA-3qf3-8w2g-rqmx, an HMAC/asymmetric-key
+confusion that needs a public key used as the HMAC secret and unrestricted algorithms — this app
+signs with a symmetric secret and verifies with `algorithms=["HS256"]` only); missing hardening on the intentionally permissive local
 development defaults; and denial of service achieved purely by exhausting CPU with very large
 uploads on an unlimited configuration — `MAX_UPLOAD_SIZE_MB` exists for that.
 
