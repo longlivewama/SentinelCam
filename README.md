@@ -2,9 +2,8 @@
 
 # SentinelCam
 
-**AI-powered fall detection and video surveillance platform — live multi-camera monitoring,
-offline video analysis, and realtime alerts, built on YOLO computer vision with a
-production-oriented full-stack architecture.**
+**Computer-vision fall detection for camera feeds and recorded video — a full-stack system that
+turns frames into reviewed, evidence-backed alerts.**
 
 [![CI](https://github.com/longlivewama/SentinelCam/actions/workflows/ci.yml/badge.svg)](https://github.com/longlivewama/SentinelCam/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -12,871 +11,563 @@ production-oriented full-stack architecture.**
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.141-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
-[![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-0B0B0B)](https://docs.ultralytics.com/)
-[![Tests](https://img.shields.io/badge/tests-142%20passing-success)](#testing)
+[![Ultralytics YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics%208.3-111F68)](https://docs.ultralytics.com/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+
+[Model card](ml/MODEL_CARD.md) · [Video-level evaluation](ml/validation/README.md) ·
+[Security policy](SECURITY.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+
+<img src="docs/images/ui-dashboard.png" alt="SentinelCam dashboard showing camera, alert, fall and recording counters, a falls-over-time chart, falls by camera, the latest video analysis and recent alerts" width="900">
+
+<sub>The SentinelCam dashboard. Real application screenshot, captured from a local stack populated
+with the end-to-end suite's synthetic seed data — no real footage or personal data.</sub>
 
 </div>
 
 ---
 
-## Table of contents
+## Why SentinelCam
 
-- [Overview](#overview)
-- [Features](#features)
-- [Architecture](#architecture)
-- [Tech stack](#tech-stack)
-- [Project structure](#project-structure)
+In care homes, hospitals and industrial sites, the harm done by a fall depends heavily on **how
+long the person lies there before anyone notices**. The cameras are often already installed; what
+is missing is something watching them.
+
+SentinelCam is that layer. It reads frames from IP/USB cameras or from an uploaded video file,
+runs a fine-tuned YOLOv8 fall detector over them, and when a fall persists it does what a human
+operator would: records a clip of what just happened, saves a still, raises an alert in the browser
+in real time, and emails the people on call. Operators then review, play back and acknowledge the
+event.
+
+> [!IMPORTANT]
+> SentinelCam is an engineering project, **not a certified medical or safety device**. On the small
+> video evaluation described [below](#ai-detection-pipeline) the detector caught 9 of 10 falls but
+> only 9 of its 20 alerts were real falls. It is usable as a **review aid** where a person checks
+> every clip; it is **not** fit for unattended alerting.
+
+## Contents
+
+- [Visual overview](#visual-overview)
+- [Key features](#key-features)
+- [System architecture](#system-architecture)
+- [AI detection pipeline](#ai-detection-pipeline)
+- [Technology stack](#technology-stack)
 - [Quick start](#quick-start)
-- [Local development (without Docker)](#local-development-without-docker)
+- [Local development](#local-development)
 - [Configuration](#configuration)
-- [Testing](#testing)
-- [Performance](#performance)
-- [Machine learning: models & datasets](#machine-learning-models--datasets)
-- [Engineering notes & design decisions](#engineering-notes--design-decisions)
-- [Security](#security)
-- [Roadmap](#roadmap)
+- [Testing and quality assurance](#testing-and-quality-assurance)
+- [Security and data handling](#security-and-data-handling)
 - [Known limitations](#known-limitations)
-- [Production deployment](#production-deployment)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
+- [Roadmap](#roadmap)
+- [Repository structure](#repository-structure)
+- [License and acknowledgments](#license-and-acknowledgments)
 
 ---
 
-## Overview
+## Visual overview
 
-Falls are one of the leading causes of injury-related hospitalisation for older adults, and in
-care homes, hospitals and industrial sites the cost of a fall is driven far less by the fall
-itself than by **how long the person lies there before anyone notices**. Camera coverage in those
-buildings is usually already in place — what is missing is something watching the feed.
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="Architecture diagram: the React browser app talks to the FastAPI backend over REST and a WebSocket; camera frames and uploaded videos flow through background threads into a shared YOLO fall pipeline, whose events become clips, snapshots, PostgreSQL rows, realtime alerts and emails" width="900">
+</p>
+<p align="center"><sub>System architecture (original diagram of the components in this repository).</sub></p>
 
-SentinelCam is that layer. It ingests video from IP/USB cameras (or from an uploaded file),
-runs pose-based computer vision over the frames, and when it detects a fall it does the three
-things a human operator would: records a clip of what just happened, raises an alert in the
-dashboard in realtime, and emails the on-call recipients.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/ui-system-status.png" alt="System Status page showing the trained fall detector loaded, fall detection running as the trained model, a 40% confidence floor, pose and object models ready, and the detection frame strides"></td>
+    <td width="50%"><img src="docs/images/ui-alerts.png" alt="Alerts page listing a fall alert with its source camera, time, 82% confidence, acknowledged status and a Watch button"></td>
+  </tr>
+  <tr>
+    <td><sub><b>System Status</b> — which detector is actually running, its thresholds, and whether
+    the trained model loaded or the app fell back to the pose heuristic.</sub></td>
+    <td><sub><b>Alerts</b> — filterable by event type and acknowledgement state, with in-browser
+    clip playback.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/ui-upload.png" alt="Video Upload and Analysis page with a drag-and-drop zone accepting MP4, MOV, AVI, MKV and WEBM up to 500 MB, and a completed analysis row showing 0 falls and 0 persons"></td>
+  </tr>
+  <tr>
+    <td colspan="2"><sub><b>Video upload &amp; analysis</b> — the file is validated in the browser and
+    on the server, then analysed in the background by the same fall pipeline live cameras use. The
+    row shown is the end-to-end suite's synthetic, person-free fixture, so 0 falls / 0 persons is
+    the correct result.</sub></td>
+  </tr>
+</table>
 
-**How it works, end to end:**
-
-1. A camera stream (or an uploaded video) is decoded frame by frame.
-2. Each processed frame goes through a **fine-tuned YOLOv8 fall detector** — a single-class model
-   trained for this project on 11k images (see [the model card](ml/MODEL_CARD.md)) — which locates
-   fallen people directly. A YOLOv8 pose model runs alongside it for person counting and for the
-   fallback heuristic.
-3. A single frame never raises an alert. A detection must **persist for the same tracked subject**
-   before an event fires (0.6 s for the trained model, 1.2 s of sustained on-ground posture for the
-   heuristic fallback), so bending down or sitting doesn't trigger it, and one bad frame can't
-   either.
-4. A firing event snapshots a rolling pre-event buffer, appends post-event frames, and writes a
-   playable MP4 clip plus a still snapshot.
-5. The event is persisted — with its **position in the footage**, its confidence, and which
-   detector produced it — pushed to the browsers entitled to see it over a WebSocket, and emailed out.
-6. Operators review, play back and acknowledge alerts from the web UI.
-
-The same detection code path serves both live cameras and uploaded files — only the frame source
-and the timeline differ — which is what keeps the "analyse this video" feature honest: it is the
-production detector running, not a separate demo path.
-
-> **Scope note.** This is an engineering project, **not a certified medical or safety device**.
-> The trained detector scores mAP@50 0.877 on a held-out test split of stills, but measured on
-> video it finds 90% of falls while raising roughly **574 false alerts per hour of ordinary
-> activity** — good enough to help a human review footage, not good enough to alert unattended.
-> That result, how to reproduce it, and why no threshold fixes it are under
-> [Known limitations](#known-limitations); the rest is in
-> [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md). Read both before any operational use.
+All screenshots are genuine captures of the running application with synthetic seed data. **No
+example detection on real footage is shown**: the footage available to this project (third-party
+clips and the CC BY-NC-SA UR Fall Detection Dataset) may not be redistributed here. The
+detector's [evaluation curves](#ai-detection-pipeline) are shown instead.
 
 ---
 
-## Features
+## Key features
 
-### Detection & video
+Every feature below is implemented in this repository, and all but the crowd and violence
+heuristics are exercised by automated tests. "Implemented" is not the same as "production-ready" —
+see [Known limitations](#known-limitations).
 
-| Feature | Status |
-|---|---|
-| Live multi-camera monitoring (RTSP IP cameras and USB devices) | ✅ |
-| MJPEG live stream, one capture connection shared across all viewers | ✅ |
-| Pose-based fall detection with a sustained-posture gate | ✅ |
-| Additional heuristic detectors: violence, crowd density, abandoned object | ✅ (heuristics — see [notes](#engineering-notes--design-decisions)) |
-| Automatic clip recording with a ~3 s pre-event rolling buffer | ✅ |
-| Person tracking + bounding-box annotation on fall clips from uploaded video | ✅ (uploads only — see [notes](#known-limitations)) |
-| Snapshot capture attached to every event | ✅ |
-| Offline video upload with drag-and-drop, client-side validation and progress tracking | ✅ |
-| Server-side analysis of uploaded video through the same detector | ✅ |
-| Per-event confidence scores | ✅ |
-| Ranged video playback and clip download | ✅ |
+**Detection and video**
 
-### Application platform
+- **Trained fall detector** — a fine-tuned single-class YOLOv8n model
+  ([`ml/exported/fall_detector_v1.pt`](ml/exported)) is the primary fall signal, with a YOLOv8-pose
+  geometric heuristic as an automatic, *reported* fallback.
+- **Temporal gating** — a single frame never raises an alert; a detection must persist for the same
+  tracked subject before an event fires, and repeat firings are debounced.
+- **Live cameras** — RTSP/HTTP stream URLs or USB device indices; one shared capture thread per
+  camera feeds the MJPEG live view, the detector and the pre-event buffer.
+- **Uploaded-video analysis** — drag-and-drop upload (MP4, MOV, AVI, MKV, WebM), background
+  analysis with live progress, and per-event timestamps *within the video*.
+- **Event evidence** — every fall produces a playable clip (pre- and post-event footage), a snapshot
+  still, and an alert row recording confidence and which detector fired. Clips from uploaded video
+  are annotated with a box that follows the person who fell.
+- **Additional live detectors** — crowd counting and a violence heuristic run on live cameras.
+  Both are heuristics, not trained models.
 
-| Feature | Status |
-|---|---|
-| JWT authentication — signup, login, logout, forgot/reset password | ✅ |
-| Role-based access control: `admin` / `operator` / `viewer`, enforced server-side | ✅ |
-| Protected frontend routes + role-aware navigation | ✅ |
-| Realtime updates over WebSocket (alerts, camera status, upload progress) | ✅ |
-| Email notifications (SMTP), with SMS/WhatsApp notifier interfaces stubbed | ✅ / 🧩 |
-| Alert acknowledgement workflow | ✅ |
-| Dashboard analytics — event counts, trends, per-camera breakdown | ✅ |
-| Admin user management (create, disable, change role) | ✅ |
-| System status page (database, detector, storage) | ✅ |
-| Per-IP rate limiting on all sensitive auth endpoints | ✅ |
-| Alembic database migrations, including a data-preserving RBAC migration | ✅ |
-| Responsive UI with toast notifications and graceful error states | ✅ |
-| One-command Docker Compose stack (Postgres + backend + frontend + mail catcher) | ✅ |
-| CI pipeline: lint, backend, frontend, end-to-end and dependency-audit jobs | ✅ |
+**Platform**
+
+- **Authentication** — signup, login, logout, forgot/reset password (one-time hashed reset tokens).
+- **Role-based access control** — `admin` / `operator` / `viewer`, enforced server-side.
+- **Per-user data isolation** — a user's uploads, their alerts and clips are visible only to them
+  and to operators, over REST *and* over the WebSocket.
+- **Real-time updates** — a WebSocket pushes new alerts, camera status changes and upload progress.
+- **Alerts, recordings and analytics** — acknowledgement workflow, paginated and filterable
+  listings, ranged in-browser playback and downloads, dashboard and analytics charts.
+- **Media access control** — video and stream URLs carry a short-lived token scoped to one
+  resource, never the session token.
+- **Upload hardening** — extension allow-list, container-signature check, 500 MB size limit enforced
+  *while the body streams in*, and a per-user storage quota.
+- **Cleanup behaviour** — deleting an upload, a recording or a user removes the associated clips,
+  snapshots and directories, not only the database rows.
+- **Operations** — a System Status page, email notifications (SMS/WhatsApp are interface stubs),
+  per-IP rate limits on auth endpoints, Alembic migrations, and a one-command Docker Compose stack.
 
 ---
 
-## Architecture
+## System architecture
 
 ```mermaid
-flowchart TB
-    subgraph client["Browser"]
-        UI["React + Vite SPA<br/>dashboard · alerts · upload · analytics"]
+flowchart LR
+    subgraph Browser
+        SPA["React 18 + Vite SPA"]
     end
 
-    subgraph api["Backend — FastAPI"]
-        REST["REST API<br/>auth · cameras · alerts · recordings · uploads"]
-        WS["WebSocket /api/ws/events<br/>RealtimeBroadcaster"]
-        RBAC["JWT auth + RBAC<br/>+ rate limiting"]
+    subgraph Backend["FastAPI backend"]
+        REST["REST API<br/>JWT + RBAC + media tokens"]
+        WS["WebSocket<br/>/api/ws/events"]
+        CAMP["Camera pipeline<br/>capture thread + detection loop"]
+        UPW["Upload analysis worker"]
+        FALL["Fall pipeline<br/>YOLOv8n fall detector<br/>+ sustain gate"]
+        REC["Event recording<br/>clip + snapshot"]
     end
 
-    subgraph workers["Processing — background threads"]
-        STREAM["Stream manager<br/>one capture thread per camera"]
-        UPLOAD["Video analysis worker<br/>frame-by-frame single pass"]
-        DET["Detection engine<br/>trained YOLO fall detector<br/>+ YOLOv8-Pose (heuristic fallback)"]
-        REC["Recording engine<br/>pre/post-event clip writer"]
-    end
-
-    subgraph data["Persistence & delivery"]
-        DB[("PostgreSQL<br/>SQLAlchemy + Alembic")]
-        FS[["Clip / snapshot storage"]]
-        MAIL["Notification service<br/>EmailNotifier over SMTP"]
-    end
-
-    CAM["IP / USB cameras"] --> STREAM
-    UI -->|"REST + JWT"| REST
-    UI <-->|"live events"| WS
-    UI -->|"video file upload"| REST
-    REST --> RBAC
-    REST --> UPLOAD
-    STREAM --> DET
-    UPLOAD --> DET
-    DET -->|"event fired"| REC
-    REC --> FS
-    REC --> DB
-    REC --> MAIL
-    REST --> DB
-    DET --> WS
-    UPLOAD --> WS
+    CAM["IP / USB cameras"] -- frames --> CAMP
+    SPA -- "REST · Bearer JWT" --> REST
+    SPA -- "upload" --> REST
+    REST --> UPW
+    CAMP --> FALL
+    UPW --> FALL
+    FALL -- "fall event" --> REC
+    REC --> DB[("PostgreSQL 16")]
+    REC --> FS[["Clip / snapshot storage"]]
+    REC --> MAIL["Email (SMTP)"]
     REC --> WS
+    UPW -- progress --> WS
+    WS -- "live events" --> SPA
+    REST <--> DB
 ```
 
-**Request/authentication path.** JWT (24 h expiry) with bcrypt-hashed passwords. Password reset
-uses one-time SHA-256-hashed tokens emailed to the user — the raw token is never persisted. Every
-JSON API route takes the session token as an `Authorization: Bearer` header and **only** as a
-header: a `?token=` query parameter is refused, so a credential that leaks into a URL cannot be
-replayed against the API.
-
-Browsers cannot attach a custom header to `<img src>`, `<video src>` or an `<a href>` download, so
-the four media endpoints have to take a credential in the URL. What travels there is **not** the
-session token. The client calls `POST /api/{recordings|video-uploads|cameras}/{id}/media-token`
-first and gets a **media token**: scoped to that one resource, expiring in
-`MEDIA_TOKEN_EXPIRE_SECONDS` (default 300 s), carrying no role, refused as a bearer credential
-anywhere, and refused by every media endpoint except the one it names. A media token recovered
-from an access log buys the ability to re-watch the clip whose URL it came from, for a few
-minutes. On top of that, `app/core/logging_utils.py` redacts `token=` out of every log record in
-the process, so neither credential is written down in the first place.
-
-The realtime WebSocket still authenticates with the session token in its handshake URL — a
-long-lived socket cannot re-authenticate per message, and it is opened by the native WebSocket
-API, which has no header either. It is covered by the same log redaction, and it rejects media
-tokens outright. See [Known limitations](#known-limitations).
-
-**Authorization.** Two layers. *Role* gates, enforced by FastAPI dependencies (`require_admin`,
-`require_operator`) on every mutating endpoint: `admin` has full access including user management;
-`operator` manages cameras, acknowledges alerts and analyses video; `viewer` is read-only plus
-upload/analysis. And *row-level* scoping (`app/core/scoping.py`), which decides who may see a
-given alert, clip or realtime event: anything derived from a user's uploaded video belongs to that
-user, anything from a shared camera is visible to every authenticated user, and operators see
-everything. The frontend's route guards and hidden buttons are a UX convenience, **not** the
-security boundary.
-
-**Streaming.** Each camera gets one lazily-started background thread owning the
-`cv2.VideoCapture` connection. It decodes frames and keeps the latest JPEG in a shared buffer,
-which `/stream` serves as `multipart/x-mixed-replace` to any number of simultaneous viewers —
-without opening a second capture connection per viewer.
-
-**Recording.** That same thread keeps a rolling buffer of the last ~3 seconds of raw frames. When
-a detector fires, the recording engine snapshots the buffer, appends ~3 more seconds of live
-frames, and writes the combined clip (`avc1`/H.264, falling back to `mp4v`), records it in the
-database, and dispatches an email alert with the snapshot attached. Events store which detector
-fired them and, for uploads, the fall's **position in the source footage** — so the results screen
-can seek the video to the moment itself rather than showing the time the analysis ran.
-
-**Realtime.** An in-process pub/sub broadcaster over a single WebSocket endpoint lets background
-worker threads push `alert.created`, `camera.status`, `upload.progress` and `upload.completed`
-events to connected tabs instantly — no polling. Delivery is **scoped per subscriber**, using the
-same ownership rule as the REST API: camera events go to everyone, upload events only to the
-uploader and to operators. The socket also closes itself when the token it was opened with
-expires, since a long-lived connection cannot re-authorize per message the way an HTTP request
-can.
+| Component | Responsibility | Code |
+|---|---|---|
+| **Frontend** | React SPA served by nginx in Docker. Role-aware routes, Zustand stores, a WebSocket client that stops reconnecting with an expired token, media players that mint per-clip tokens. | [`frontend/src`](frontend/src) |
+| **REST API** | Auth, cameras, alerts, recordings, uploads, analytics, admin and system routes. Every JSON route takes the session JWT **only** as an `Authorization: Bearer` header. | [`backend/app/api/routes`](backend/app/api/routes) |
+| **Request middleware** | CORS, security headers (`nosniff`, `DENY`, `no-referrer`), and a request-body limit that refuses an oversized upload before it is spooled to disk. | [`backend/app/core/http_hardening.py`](backend/app/core/http_hardening.py) |
+| **Camera pipeline** | One capture thread per camera keeps the latest JPEG (for the MJPEG view) and a 5-second rolling frame buffer. A per-camera detection loop runs every 3rd frame. | [`stream_manager.py`](backend/app/services/stream_manager.py), [`engine.py`](backend/app/services/detection/engine.py) |
+| **Upload analysis** | A background worker decodes the uploaded file, runs inference on every 5th frame, reports progress, and writes one clip per fall. At most 2 analyses run at once; the rest queue. | [`video_analysis.py`](backend/app/services/video_analysis.py) |
+| **Fall pipeline** | Selects the strategy (`auto` / `model` / `heuristic` / `hybrid`) once, and is shared by both video sources so uploads exercise the production detector. | [`fall_pipeline.py`](backend/app/services/detection/fall_pipeline.py) |
+| **Event recording** | Writes the clip through a codec ladder (H.264 → VP8 → VP9 → MPEG-4), saves a snapshot, persists `Recording` + `Event` rows, publishes a realtime alert and emails recipients. | [`recording_engine.py`](backend/app/services/recording_engine.py) |
+| **Realtime** | An in-process broadcaster bridges worker threads to WebSocket clients, delivering each event only to the users entitled to see it. | [`realtime.py`](backend/app/services/realtime.py) |
+| **Persistence** | PostgreSQL via SQLAlchemy 2; schema managed by Alembic. Files live under `storage/{uploads,recordings,snapshots}` (Docker named volumes in Compose). | [`backend/app/models`](backend/app/models), [`backend/alembic`](backend/alembic) |
 
 ---
 
-## Tech stack
+## AI detection pipeline
 
-| Layer | Technologies |
+### From frame to alert
+
+```mermaid
+flowchart LR
+    A["Frame<br/>camera: every 3rd<br/>upload: every 5th"] --> B["YOLOv8n fall detector<br/>boxes with conf ≥ 0.4"]
+    A --> P["YOLOv8n-pose<br/>people + keypoints"]
+    B --> C["Per-subject tracking"]
+    C --> D{"Same subject for<br/>≥ 0.6 s and ≥ 3 frames?"}
+    D -- no --> A
+    D -- yes --> E["Fall event<br/>debounced 10 s per subject"]
+    E --> F["Clip: pre + post-event frames<br/>Snapshot JPEG"]
+    F --> G["Event + Recording rows<br/>WebSocket alert · email"]
+    P -.-> H["Person count ·<br/>clip annotation ·<br/>heuristic fallback"]
+```
+
+1. **Frames.** Live cameras are sampled every 3rd frame (`DETECTION_FRAME_STRIDE`); uploaded files
+   every 5th (`VIDEO_ANALYSIS_FRAME_STRIDE`). Upload timestamps are measured on the video's own
+   timeline, so the gate behaves identically however fast the host decodes.
+2. **Detection.** The trained YOLOv8n `Fall` detector returns boxes above
+   `FALL_DETECTOR_MIN_CONFIDENCE` (default 0.4). A YOLOv8n-pose model runs alongside it to count
+   people, to annotate upload clips, and to drive the heuristic fallback.
+3. **Temporal gate.** Boxes are associated with tracked subjects, and an event fires only when the
+   same subject has been detected for at least `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` (0.6 s) **and**
+   `FALL_DETECTOR_MIN_CONSECUTIVE_FRAMES` (3) processed frames. Each subject is then debounced for
+   10 s. The pose heuristic instead requires 1.2 s of sustained lying posture.
+4. **Evidence.** Live-camera clips combine 5 s from the rolling buffer with 5 s collected after the
+   event (`PRE_EVENT_SECONDS` / `POST_EVENT_SECONDS`); upload clips span 3 s either side. Each clip
+   gets a snapshot still.
+5. **Delivery.** The event is stored with its confidence, its detector (`model` or `heuristic`) and,
+   for uploads, its position in the footage. It is then pushed to entitled browsers and emailed.
+
+`FALL_DETECTION_MODE=auto` (the default) uses the trained model when it loads and otherwise falls
+back to the pose heuristic. That fallback is never silent: `GET /api/system/status` and the System
+Status page report both the configured and the active mode.
+
+**Upload-clip annotation.** Clips written from uploaded video carry a box over the person who fell,
+labelled `FALL DETECTED` with a temporary track id and the event's confidence. Annotation runs no
+extra inference and cannot create, suppress or retime an event. When no tracked person can be
+confidently associated with the detection, the detector's own region is drawn dashed and labelled
+`UNMATCHED`. Track ids live for seconds within one analysis; there is no face or identity
+recognition. Live-camera clips are not annotated.
+
+### The model
+
+`ml/exported/fall_detector_v1.pt` is a YOLOv8n detector (3.2 M parameters, 5.4 MB) fine-tuned for
+80 epochs from COCO weights on the Roboflow `voc-fall-person_falls` dataset (CC BY 4.0), prepared
+into 11,074 train / 2,189 validation / 2,176 test images. Its frame-level metrics on still images,
+from [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md):
+
+| Split | Precision | Recall | mAP@50 | mAP@50-95 |
+|---|---:|---:|---:|---:|
+| Validation (2,189 images) | 0.812 | 0.710 | 0.826 | 0.528 |
+| Held-out test (2,176 images) | 0.846 | 0.800 | 0.877 | 0.557 |
+
+<p align="center">
+  <img src="ml/reports/fall_detector/PR_curve.png" alt="Precision-recall curve of the fall detector on the validation split" width="440">
+  <img src="ml/reports/fall_detector/confusion_matrix_normalized.png" alt="Normalized confusion matrix of the fall detector on the validation split" width="440">
+</p>
+<p align="center"><sub>Precision–recall curve and normalized confusion matrix produced by the
+training run (validation split). Frame-level, on still images.</sub></p>
+
+### Video-level evaluation (limited)
+
+Frame-level metrics do not describe an alerting system. [`ml/validation/`](ml/validation/README.md)
+drives the production inference path over labelled clips and measures incidents instead. The only
+corpus run so far is small: **20 clips from the UR Fall Detection Dataset — 10 falls and 10
+activities of daily living, 1.8 minutes in total, one subject, one viewpoint, two rooms.**
+
+| Measure | Result |
+|---|---:|
+| Incident recall | 90% (9 of 10 falls) |
+| Alerts that were real falls (incident precision) | 45% (9 of 20) |
+| Mean detection latency | 0.63 s |
+| False alerts per hour of ordinary activity | ≈ 574 (extrapolated from about 1 minute of footage) |
+
+These figures were reproduced with fresh inference (`--no-cache`) on 2026-10-16, on CPU, with the
+committed weights. Treat them as **indicative only**: the sample is tiny, and the false-alert rate is
+an extrapolation, not a benchmark. The direction is nevertheless clear. On ordinary activity the
+detector emits `Fall` boxes as often, and as confidently, as on real falls, so no confidence or
+duration threshold separates them — fixing it needs retraining with hard negatives. Reproduce with:
+
+```bash
+cd backend && source venv/bin/activate && cd ..
+python -m ml.validation.fetch_urfd      # downloads the clips locally; not redistributed here
+python -m ml.validation.evaluate --no-cache
+```
+
+Full methodology, the dataset the evaluation *should* use, and its current coverage gaps are in
+[`ml/validation/README.md`](ml/validation/README.md) and [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md).
+
+---
+
+## Technology stack
+
+| Layer | Technology |
 |---|---|
-| **Frontend** | React 18, Vite 5, Tailwind CSS 3, Zustand, React Router, Axios |
-| **Backend** | Python 3.11, FastAPI, Uvicorn, Pydantic v2, SQLAlchemy 2.0, Alembic |
-| **Database** | PostgreSQL 16 |
-| **Computer vision** | Ultralytics YOLOv8 (pose + object detection), OpenCV |
-| **ML runtime** | PyTorch (training), ONNX Runtime (inference) |
-| **Realtime** | WebSocket (FastAPI/Starlette) |
-| **Auth** | JWT (python-jose, HS256), bcrypt via passlib |
-| **Testing** | pytest, Vitest + Testing Library, Playwright |
-| **Tooling / CI** | Docker & Docker Compose, nginx, GitHub Actions, ruff, ESLint |
-
----
-
-## Project structure
-
-```
-SentinelCam/
-├── backend/                  FastAPI service
-│   ├── app/
-│   │   ├── api/routes/       auth, cameras, alerts, recordings, video_uploads,
-│   │   │                     analytics, admin, realtime, system
-│   │   ├── core/             security, RBAC dependencies, rate limiting
-│   │   ├── models/           SQLAlchemy models (user, camera, event, recording, …)
-│   │   ├── schemas/          Pydantic request/response schemas
-│   │   ├── services/         detection engine, stream manager, recording engine,
-│   │   │                     video analysis, realtime broadcaster, notifications
-│   │   ├── config.py         environment-driven settings
-│   │   └── main.py           application entrypoint
-│   ├── alembic/              database migrations
-│   ├── tests/                69 backend tests (pytest, real PostgreSQL)
-│   └── Dockerfile
-├── frontend/                 React + Vite single-page app
-│   ├── src/
-│   │   ├── pages/            dashboard, cameras, alerts, recordings, upload,
-│   │   │                     analytics, admin users, auth pages
-│   │   ├── components/       route guards, camera tiles, charts, modals, toasts
-│   │   ├── store/            Zustand stores (auth, toasts, alert badge)
-│   │   ├── lib/              realtime client, formatting, upload validation
-│   │   └── api/              Axios client with auth interception
-│   ├── nginx.conf            production static-serving config
-│   └── Dockerfile
-├── ml/                       standalone ML pipeline (not imported by the app)
-│   ├── detector/             YOLO fall-detector: dataset download, analysis,
-│   │                         preparation and training scripts
-│   ├── scripts/              keypoint-feature dataset builders
-│   ├── exported/             committed model artifact + metadata (ONNX)
-│   ├── train.py evaluate.py export.py
-│   └── README.md             full methodology, evaluation and honest caveats
-├── e2e/                      Playwright suite driving the real Docker stack
-│   ├── tests/                auth, cameras, alerts/recordings, upload
-│   └── fixtures/             test media
-├── .github/workflows/ci.yml  backend · frontend · e2e · dependency-audit jobs
-├── docker-compose.yml        Postgres + backend + frontend + Mailpit
-└── .env.example              documented configuration template
-```
+| **Frontend** | React 18, Vite 5, React Router 6, Zustand 4, Axios, Tailwind CSS 3 |
+| **Backend** | Python 3.11, FastAPI 0.141, Starlette 1.6, Uvicorn, Pydantic 2 |
+| **Database** | PostgreSQL 16, SQLAlchemy 2.0, Alembic |
+| **Computer vision** | Ultralytics 8.3 (YOLOv8n detection and pose), PyTorch (CPU build in Docker), OpenCV 4.10 |
+| **Auth** | JWT HS256 (python-jose), bcrypt (passlib), resource-scoped media tokens |
+| **Realtime** | FastAPI / Starlette WebSocket |
+| **Notifications** | SMTP email; Mailpit as the development mail catcher |
+| **Testing** | pytest (against real PostgreSQL), Vitest + Testing Library, Playwright |
+| **Quality / CI** | ruff, ESLint, GitHub Actions (lint, tests, build, E2E, dependency audit, credential scan) |
+| **Packaging** | Docker, Docker Compose, nginx (static frontend) |
 
 ---
 
 ## Quick start
 
-### Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-
-That's it — Postgres, the backend, the built frontend and a mail catcher all come up together.
-
-### 1. Clone
+**Prerequisites:** Docker with Docker Compose. Nothing else is required for the containerised stack.
 
 ```bash
 git clone https://github.com/longlivewama/SentinelCam.git
 cd SentinelCam
-```
-
-### 2. Configure (optional)
-
-Every value has a working local default. To override any of them:
-
-```bash
-cp .env.example .env      # then edit as needed
-```
-
-Set a real `JWT_SECRET_KEY` for anything beyond a local trial:
-
-```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"
-```
-
-### 3. Start the stack
-
-```bash
+cp .env.example .env           # optional: every value has a local default
 docker compose up --build
 ```
 
-### 4. Create the first admin user
-
-In a second terminal, once the stack is healthy:
+Then, in a second terminal, create the first administrator (it prompts for an email and password):
 
 ```bash
 docker compose exec backend python seed_admin.py
 ```
 
-### 5. Open the app
-
-| Service | URL |
+| Service | Default URL |
 |---|---|
-| Web UI | http://localhost:5173 |
-| API + interactive docs | http://localhost:8000 · http://localhost:8000/docs |
-| Mailpit (catches alert & password-reset email) | http://localhost:8025 |
+| Web application | http://localhost:5173 |
+| API and interactive docs (disabled when `ENVIRONMENT=production`) | http://localhost:8000 · http://localhost:8000/docs |
+| Mailpit — catches alert and password-reset emails | http://localhost:8025 |
 
-Log in, then either add a camera (an `rtsp://…` URL, or a device index like `0` for a USB
-webcam) from the **Cameras** page, or go straight to **Upload** and analyse a video file — no
-camera hardware required.
+Ports are configurable through `FRONTEND_PORT`, `BACKEND_PORT`, `POSTGRES_PORT` and `MAILPIT_*` in
+`.env`. Log in, then go to **Upload** to analyse a video (no camera needed), or add a camera on the
+**Cameras** page with an `rtsp://…` URL or a USB device index such as `0`.
 
-> **Camera access from inside Docker** is host-OS dependent. Linux can pass a USB device through
-> with `devices:` in `docker-compose.yml`; Docker Desktop on macOS/Windows generally cannot. RTSP
-> IP cameras work over the network regardless. For local USB webcam testing, run the backend
-> outside Docker (below).
+> [!NOTE]
+> **Upgrading an existing database.** The backend container runs `alembic upgrade head` on every
+> start. A database created before migration `f4a1c9e6b230` (which adds `cameras.deleted_at`) is
+> therefore migrated the first time a newer image starts. The migration only adds a nullable column,
+> but back up any database holding data you care about before rebuilding.
 
-Recordings, snapshots and uploads persist in named Docker volumes across restarts.
-`docker compose down -v` wipes them along with the database.
+> [!TIP]
+> USB cameras generally cannot be passed through Docker Desktop on macOS or Windows. Run the
+> backend outside Docker for local webcam testing; RTSP cameras work either way.
+
+Recordings, snapshots and uploads persist in named Docker volumes. `docker compose down -v` deletes
+them **and the database**.
 
 ---
 
-## Local development (without Docker)
+## Local development
 
-**Prerequisites:** Python 3.11+, Node 20.18+ (Node 22 recommended — jsdom 30 needs a recent
-Node to run the frontend tests), and a local PostgreSQL server.
+**Prerequisites:** Python 3.11, Node 22 (the version CI uses; jsdom 30 needs a recent Node), and a
+local PostgreSQL server.
 
 ```bash
-# 1. Databases
+# Databases
 createdb sentinelcam
-createdb sentinelcam_test          # only needed for the backend test suite
+createdb sentinelcam_test                 # used by the backend test suite only
 
-# 2. Backend
+# Backend — http://localhost:8000
 cd backend
-python3 -m venv venv && source venv/bin/activate
+python3.11 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env               # fill in DATABASE_URL, JWT_SECRET_KEY, SMTP_* …
-alembic upgrade head               # apply the schema
-python seed_admin.py               # create the first admin user
-uvicorn app.main:app --reload      # http://localhost:8000  (docs at /docs)
+cp .env.example .env                      # set DATABASE_URL, JWT_SECRET_KEY, SMTP_* …
+alembic upgrade head
+python seed_admin.py
+uvicorn app.main:app --reload
 
-# 3. Frontend (separate terminal)
+# Frontend — http://localhost:5173 (separate terminal)
 cd frontend
-npm install
-cp .env.example .env               # VITE_API_URL=http://localhost:8000
-npm run dev                        # http://localhost:5173
+npm ci
+cp .env.example .env                      # VITE_API_URL=http://localhost:8000
+npm run dev
 ```
 
-### Database migrations
-
-Schema changes are managed with Alembic; `alembic upgrade head` is the production migration path.
-
-```bash
-cd backend
-alembic upgrade head                                      # apply pending migrations
-alembic revision --autogenerate -m "describe the change"  # after changing a model
-```
-
-`Base.metadata.create_all()` also runs once on startup as a convenience for fresh dev databases —
-it only ever *adds missing tables* and never alters existing ones, so it is a safety net, not a
-substitute for migrations against a database that already holds data.
+The base YOLO weights (`yolov8n.pt`, `yolov8n-pose.pt`) are downloaded by Ultralytics on first use
+and are gitignored. The trained fall detector is committed and loaded from `ml/exported/` by
+default. More detail: [`backend/README.md`](backend/README.md), [`frontend/README.md`](frontend/README.md).
 
 ---
 
 ## Configuration
 
-All configuration is read from the environment. Never hardcode credentials — every real `.env`
-file is gitignored, and only `.env.example` templates are committed.
+All configuration comes from environment variables. Only `.env.example` templates are committed;
+real `.env` files are gitignored. **Never commit real secrets.**
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET_KEY` | JWT signing secret. The app **refuses to start** if left at its insecure default while `ENVIRONMENT=production` |
-| `MEDIA_TOKEN_EXPIRE_SECONDS` | Lifetime of the short-lived, resource-scoped token the media endpoints accept in a URL (default `300`) |
-| `CORS_ORIGINS` | Comma-separated allowed frontend origins |
-| `FRONTEND_URL` | Base URL used to build links in emails (e.g. password reset) |
-| `NOTIFICATION_CHANNELS` | Comma-separated enabled channels (`email` works out of the box) |
-| `SMTP_*`, `ALERT_RECIPIENTS` | Email delivery configuration |
-| `UPLOADS_DIR`, `MAX_UPLOAD_SIZE_MB`, `ALLOWED_VIDEO_EXTENSIONS` | Video upload limits |
-| `MAX_UPLOAD_STORAGE_PER_USER_MB` | Per-account storage quota (0 disables it) |
-| `MAX_CONCURRENT_VIDEO_ANALYSES` | Upper bound on simultaneous upload analyses; the rest queue |
-| `FALL_DETECTOR_MODEL_PATH` | The trained fall detector. Defaults to the committed artifact; empty forces the pose heuristic |
-| `FALL_DETECTION_MODE` | `auto` \| `model` \| `heuristic` \| `hybrid` — see [Machine learning](#machine-learning-models--datasets) |
-| `FALL_DETECTOR_MIN_CONFIDENCE`, `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` | Detection threshold and how long a detection must persist before it alerts |
-| `FALL_CLASSIFIER_MODEL_PATH` | Optional path to the earlier ONNX keypoint classifier (empty = off, the default) |
-| `AUTH_*_MAX_REQUESTS` / `AUTH_*_WINDOW_SECONDS` | Per-IP rate limits on signup, login, forgot-password and reset-password |
-| `VITE_API_URL` *(frontend)* | Backend base URL; the WebSocket URL is derived from it automatically |
+| `JWT_SECRET_KEY` | Signing secret. The backend **refuses to start** with the placeholder when `ENVIRONMENT=production`. Generate one with `python3 -c "import secrets; print(secrets.token_hex(32))"` |
+| `ENVIRONMENT` | `development` · `test` · `production` (production also hides `/docs`) |
+| `DATABASE_URL`, `POSTGRES_PASSWORD` | PostgreSQL connection |
+| `CORS_ORIGINS`, `FRONTEND_URL`, `VITE_API_URL` | Allowed browser origins, links in emails, the API base URL baked into the frontend build |
+| `NOTIFICATION_CHANNELS`, `SMTP_*`, `ALERT_RECIPIENTS` | Email delivery |
+| `MAX_UPLOAD_SIZE_MB` (500), `MAX_UPLOAD_STORAGE_PER_USER_MB` (5000), `ALLOWED_VIDEO_EXTENSIONS` | Upload limits |
+| `MAX_CONCURRENT_VIDEO_ANALYSES` (2) | Concurrent upload analyses; the rest queue |
+| `FALL_DETECTION_MODE` (`auto`), `FALL_DETECTOR_MODEL_PATH` | Detection strategy and checkpoint |
+| `FALL_DETECTOR_MIN_CONFIDENCE` (0.4), `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` (0.6), `FALL_DETECTOR_MIN_CONSECUTIVE_FRAMES` (3) | The alerting gate |
+| `DETECTION_FRAME_STRIDE` (3), `VIDEO_ANALYSIS_FRAME_STRIDE` (5), `PRE_EVENT_SECONDS` / `POST_EVENT_SECONDS` (5 / 5) | Sampling and clip length for live cameras |
+| `MEDIA_TOKEN_EXPIRE_SECONDS` (300), `JWT_EXPIRE_HOURS` (24) | Token lifetimes |
+| `AUTH_*_MAX_REQUESTS`, `AUTH_*_WINDOW_SECONDS` | Per-IP rate limits on signup, login, forgot- and reset-password |
 
-The full commented list lives in [`.env.example`](.env.example),
-[`backend/.env.example`](backend/.env.example) and `frontend/.env.example`.
+The commented templates are [`.env.example`](.env.example), [`backend/.env.example`](backend/.env.example)
+and [`frontend/.env.example`](frontend/.env.example).
 
 ---
 
-## Testing
+## Testing and quality assurance
 
-**618 automated tests across three suites**, all currently passing, plus a five-job CI pipeline.
-
-| Suite | Count | What it covers |
-|---|---:|---|
-| **Backend** (pytest) | **516** | Security primitives, media-token scoping and expiry, log redaction, pagination (ordering, tiebreakers, ownership, IDOR), fall-detection logic (both the trained-model gate and the pose heuristic), the committed model artifact's contract, cross-user isolation, auth & RBAC, cameras, alerts, recordings, upload validation, HTTP Range handling, realtime delivery scoping, analytics, rate limiting, Alembic migrations + schema-drift detection, email notifier, the ML validation framework, and an end-to-end video analysis over a real decoded video |
-| **Frontend** (Vitest + Testing Library) | **108** | Auth pages, route guards, media-token minting and retry, pagination controls and server-side filtering, upload workflow (drag-drop, validation, progress, delete), the results screen's in-video timestamps and detector labelling, system status including the model-fallback warning, dashboard, formatting helpers, Zustand stores |
-| **End-to-end** (Playwright) | **18** | Real Chromium against the real Docker Compose stack — signup, login, logout, forgot/reset password (reading the actual email out of Mailpit's API), camera CRUD + RBAC, alert acknowledgement, recording playback (the clip is decoded in the browser, not merely mounted), and the full upload → process → view-results workflow |
-| **Docker** | 4 services | `postgres`, `backend`, `frontend`, `mailpit` — all healthy under `docker compose up` |
+### Commands
 
 ```bash
-# Backend — runs against a real PostgreSQL database, not a mock
+# Backend: unit, API and integration tests against a real PostgreSQL database
 cd backend && source venv/bin/activate
-createdb sentinelcam_test        # one-time
-pytest
 ruff check .
+pytest                       # needs the sentinelcam_test database (see backend/tests/conftest.py)
 
-# Frontend
+# Frontend: lint, unit and component tests, production build
 cd frontend
-npm run lint && npm run test && npm run build
+npm run lint && npm test && npm run build
 
-# End-to-end (brings the Docker stack up, seeds fixtures, runs, tears down)
-cd e2e
-npm install
-npx playwright install --with-deps chromium   # one-time
-npm test
+# Browser end-to-end tests (Playwright) — see the warning below first
+cd e2e && npm install && npx playwright install chromium && npm test
 ```
 
-Backend tests deliberately run against real Postgres rather than a sqlite substitute — the app
-relies on Postgres-specific behaviour (boolean filters, timezone-aware timestamps) in enough
-places that sqlite would give false confidence.
+> [!WARNING]
+> `cd e2e && npm test` starts the **default** Docker Compose project and its seeder **truncates
+> every table**. On a machine where that stack holds data you care about, run it under a separate
+> `COMPOSE_PROJECT_NAME`, or use `E2E_SKIP_DOCKER=1` against a scratch database — see
+> [`e2e/README.md`](e2e/README.md). The backend suite refuses to run against any database whose
+> name does not mark it as a test database.
 
-No coverage percentage is published here, because none has been measured.
+### Verified results
 
----
+Results from runs on **2026-10-16** (Apple M5, macOS, CPU inference) against this revision:
 
-## Performance
-
-Measured end to end on the live Docker stack — a real upload of the real fall video through the
-real API, timed to `status=completed`. Host: Apple M5, backend container limited to 4 CPUs / 4 GB.
-
-Test video: 576x1024, 30 fps, 878 frames, **29.27 s**.
-
-| | Before | After |
-|---|---:|---:|
-| Wall clock | 77.57 s | **36.33 s** (median of 5) |
-| Effective throughput | 11.3 frames/s | **24.2 frames/s** |
-| vs realtime | 2.65x slower | 1.24x slower |
-| Falls detected | 2 (t=1.67 s / 0.70, t=20.00 s / 0.74) | **identical** |
-| Persons detected | 3 | **identical** |
-
-**53% faster, with byte-identical detection output** — inference is untouched.
-
-The win is not in the model. Profiling showed clip encoding was ~70% of the wall clock: the codec
-ladder in `recording_engine.open_writer` preferred VP9, and libvpx-vp9 through OpenCV's
-`VideoWriter` has no way to set a speed/deadline, so it ran at its slow default. VP8 sits ahead of
-it now, on measurement rather than preference — encoding one 180-frame clip in the reference
-container:
-
-| Codec | Encode | Bytes | PSNR mean | PSNR min | SSIM |
-|---|---:|---:|---:|---:|---:|
-| `avc1` (H.264) | does not open — the stock wheel ships FFmpeg without libx264 | | | | |
-| `vp09` (VP9) | 26.6 s | 4 938 089 | 39.91 dB | 38.37 dB | 0.9722 |
-| **`VP80` (VP8)** | **5.6 s** | **4 062 534** | **39.64 dB** | **38.92 dB** | **0.9712** |
-| `mp4v` | 0.4 s | 1 580 629 | 38.65 dB | 37.83 dB | 0.9641 |
-
-4.8x faster, 18% smaller, 0.27 dB below VP9 on mean PSNR — well inside the ~1 dB a viewer could
-notice — and with a *better* worst-frame PSNR. Both are equally playable in every browser this
-targets. `mp4v` stays last regardless of speed: no current browser can decode it, which was a
-real incident here.
-
-**Not claimed: this is not realtime.** 36.3 s to analyse 29.3 s of footage is 1.24x slower than
-realtime. A cold container adds ~37 s of one-time model loading to the first upload after a
-restart. What remains is inference — roughly evenly split between the pose model (13.6 s) and the
-fall detector (10.6 s) over 176 processed frames — and it cannot be moved to a GPU in the Linux
-container this ships in: MPS is macOS-only and there is no CUDA device.
-
----
-
-## Machine learning: models & datasets
-
-The `ml/` directory is a **standalone training pipeline**. It is not imported by the running
-backend — it produces the model artifacts the backend loads.
-
-### The production fall detector
-
-**`ml/exported/fall_detector_v1.pt` — YOLOv8n, single class `Fall`, 5.4 MB.** This is the model
-the application runs. Full details, honest limitations and reproduction steps live in
-**[`ml/MODEL_CARD.md`](ml/MODEL_CARD.md)**; the short version:
-
-| | Precision | Recall | mAP@50 | mAP@50-95 |
-|---|---:|---:|---:|---:|
-| Validation (2,189 images) | 0.812 | 0.710 | 0.826 | 0.528 |
-| **Held-out test (2,176 images)** | **0.846** | **0.800** | **0.877** | **0.557** |
-
-Trained for 80 epochs (18.5 h on Apple Silicon) from COCO-pretrained weights on a public Roboflow
-fall-detection dataset (CC BY 4.0), prepared into 11,074 train / 2,189 val / 2,176 test images.
-Test scores sit slightly *above* validation across all four metrics — no sign of overfitting, and
-307 near-duplicate images were moved out of val/test into train first so the test split is
-genuinely held out.
-
-Two preparation decisions shape what this model is, and both came out of a dataset analysis run
-*before* any training ([`ml/reports/fall_detector_dataset_analysis.md`](ml/reports/fall_detector_dataset_analysis.md)):
-
-- **The raw export's second class, `Person`, was dropped.** Not one image of 15,439 contained both
-  a `Fall` and a `Person` box — `Person` was entirely PASCAL VOC, `Fall` entirely separate fall
-  datasets. A two-class detector could have scored well by learning *which dataset an image came
-  from*. Dropping `Person` removes the shortcut and repurposes those 6,887 VOC images as background
-  negatives: examples of upright people that must not fire.
-- **Augmentation follows from the task, not from defaults.** This class is defined by orientation
-  relative to gravity, so vertical flips are disabled outright and rotation is capped at 5°;
-  anything more would rotate standing people into lying poses while keeping the "not a fall" label.
-  Mosaic is kept at 1.0 precisely *because* no source image contains both a fall and an upright
-  person — compositing four images synthesises the co-occurrence the dataset structurally lacks.
-
-**Known limitations, stated plainly:** every metric above is **per-frame on stills**. The
-operational quantities — falls detected per fall that happened, false alerts per hour of ordinary
-footage, detection latency — are **not measured**, and the source data is not care-home footage.
-See the model card's Limitations section in full before deploying it anywhere real.
-
-**Frame-level metrics are not operational evidence.** `ml/validation/` implements the video-level
-evaluation that would produce it: it drives the real production inference path over labelled clips
-and reports incident recall, incident precision, false alerts/hour, latency and a sweep over the
-two thresholds that govern the trade-off. **Evaluation framework ready; real video validation
-pending labelled footage** — no labelled corpus exists yet, so no video-level number has been
-produced, and `FALL_DETECTOR_MIN_CONFIDENCE` / `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` remain
-reasoned defaults rather than measured ones. See [`ml/validation/README.md`](ml/validation/README.md).
-
-### Integration
-
-```
-frame ─▶ fall_object_detector.detect()   YOLO inference, conf ≥ 0.4
-      ─▶ ModelFallDetector.update()       tracking + sustain gate + debounce
-      ─▶ Event(detector, confidence, video_timestamp_seconds)
-```
-
-| Setting | Default | Effect |
+| Suite | What it covers | Result |
 |---|---|---|
-| `FALL_DETECTOR_MODEL_PATH` | `ml/exported/fall_detector_v1.pt` | Empty forces the pose heuristic |
-| `FALL_DETECTION_MODE` | `auto` | `auto` \| `model` \| `heuristic` \| `hybrid` |
-| `FALL_DETECTOR_MIN_CONFIDENCE` | `0.4` | Per-box confidence floor |
-| `FALL_DETECTOR_MIN_SUSTAINED_SECONDS` | `0.6` | How long a detection must persist |
+| **Backend** — pytest + ruff | Security primitives, auth and RBAC, cross-user isolation, media tokens, upload validation and body limits, pagination, Range requests, realtime scoping, cascade deletes and file cleanup, camera stream resource handling, Alembic migrations and schema drift, the fall-detection gates, the committed model artifact, and an analysis over a real decoded video | **696 passed**, 0 failed; ruff clean |
+| **Frontend** — Vitest + ESLint | Auth pages, route guards, media-token minting and failure states, pagination and filters, upload workflow, results screen, system status, stores | **121 passed**, 0 failed; ESLint 0 problems |
+| **Production build** — Vite | Frontend bundle | Succeeded |
+| **End-to-end** — Playwright, Chromium | Signup, login, logout, password reset through a real email, camera CRUD and RBAC, alert acknowledgement, in-browser clip decoding, and upload → analyse → results | **18 passed**, against an isolated local backend and scratch database |
+| **AI evaluation** | 20 labelled URFD clips through the production inference path | Reproduced the figures [above](#video-level-evaluation-limited) |
 
-`auto` runs the trained model when it loads and falls back to the pose heuristic when it doesn't,
-so a deployment without the checkpoint still detects falls. That fallback is **never silent**:
-`GET /api/system/status` and the System Status page report both the configured and the *active*
-mode, and flag the degradation explicitly.
-
-Inference costs ~120 ms per 640 px frame on CPU. For live cameras this is a *third* model per
-processed frame alongside pose and object detection — budget for it, or raise
-`DETECTION_FRAME_STRIDE`.
-
-### Clip annotation (uploads)
-
-A fall clip written by the upload analyser carries a box over the person the fall belongs to. This
-sits strictly *downstream* of everything above — it cannot create, suppress, retime or re-score a
-fall — and it adds no inference, because it consumes the pose boxes and `Fall` boxes the pipeline
-has already produced for each processed frame.
-
-```
-processed frame ─▶ PersonTracker           pose boxes  → temporary track ids
-                ─▶ PersonTracker           Fall boxes  → fall regions
-fall event      ─▶ associate()             containment + IoU + centre + continuity
-                ─▶ AnnotationPlan          the subject's boxes across the clip window
-clip write      ─▶ BoxTimeline             interpolated between real observations only
-                ─▶ FALL DETECTED / ID n | 0.74
-```
-
-Three properties are deliberate:
-
-- **The box moves.** Inference runs every `VIDEO_ANALYSIS_FRAME_STRIDE`-th frame, so a clip has a
-  real observation ~6 times a second; frames in between are interpolated between two real
-  sightings. Outside the observed span, or across a gap longer than 0.75 s, nothing is drawn.
-- **Association can refuse.** With several people on screen only the one who fell is boxed, and a
-  candidate that is merely near the fall — or an even split between two of them — yields no track
-  id at all. The clip then shows the detector's own region as a dashed box marked `UNMATCHED`.
-- **Track ids are object-tracking handles, nothing more.** They live for a few seconds inside one
-  analysis, are never persisted, and are never compared across videos. No face or identity
-  recognition of any kind is involved.
-
-`backend/app/services/detection/{person_tracker,track_fall_association,annotated_clip_renderer,fall_annotation}.py`.
-
-### The earlier keypoint classifier (secondary, disabled by default)
-
-`ml/exported/fall_classifier_v1.onnx` is a 10-feature keypoint MLP from an earlier iteration. It is
-**not** the production detector and has a much weaker standing: its 1.000 test metrics are flagged
-in [`ml/reports/eval_report.md`](ml/reports/eval_report.md) as likely domain-shortcut artifacts. It
-was only ever wired in as a confidence nudge on top of the heuristic's gate, never as a source of
-truth, and remains off unless `FALL_CLASSIFIER_MODEL_PATH` is set.
-
-### What is and is not in this repository
-
-| Artifact | In Git? | Why |
-|---|---|---|
-| Detector + classifier pipeline source (`ml/detector/`, `ml/scripts/`) | ✅ | The reproducible part |
-| **Trained fall detector** (`ml/exported/fall_detector_v1.pt` + metadata) | ✅ | 5.4 MB — the actual deliverable, so a fresh clone runs the real model |
-| Detector metrics: results CSV, PR/F1 curves, confusion matrices | ✅ | So the model card's numbers are checkable without retraining |
-| Exported keypoint classifier (`ml/exported/fall_classifier_v1.*`) | ✅ | Small, and the deliverable of that earlier pipeline |
-| Training **datasets** (`ml/data/…`) | ❌ | Large, redistributable only under their own licences — re-fetch with the download scripts |
-| Training **runs & checkpoints** (`ml/runs/`) | ❌ | ~16 MB per run of per-epoch checkpoints and batch mosaics; the selected artifact is promoted to `ml/exported/` |
-| Training **logs** (`ml/logs/`) | ❌ | Machine-local noise |
-| Auto-downloaded YOLO base weights (`*.pt` at repo root) | ❌ | Fetched on demand by Ultralytics |
-
-The committed weights are fine-tuned from **AGPL-3.0** Ultralytics COCO weights on a **CC BY 4.0**
-dataset — see [`NOTICE.md`](NOTICE.md) before any commercial use or redistribution.
-
-Reproduce the model with `download_dataset.py` → `analyze_dataset.py` → `prepare_dataset.py` →
-`train.py` in `ml/detector/` (a stratified smoke-test subset is available for fast iteration). Do
-not overwrite `fall_detector_v1.pt`; promote a retrained model as `v2` alongside it.
+**Not verified by these runs:** Docker image builds, physical or RTSP cameras, GPU inference, real
+SMTP delivery, multi-worker deployment, long-video memory use, and production deployment. No code
+coverage percentage is published because none has been measured.
 
 ---
 
-## Engineering notes & design decisions
+## Security and data handling
 
-Three of the four live-camera detectors were specified against research-grade models that require
-specific datasets and substantial GPU time (RWF-2000 for violence, ShanghaiTech/CSRNet for crowd
-density, DeepSORT for tracking). Rather than ship an untrained model behind a confident-sounding
-name, each was implemented as a practical, honestly-scoped equivalent that satisfies the same
-interface and can be swapped later **without touching the rest of the system**:
+Implemented controls:
 
-| Detector | Research-grade approach | What is actually implemented | Upgrade path |
-|---|---|---|---|
-| **Fall** | YOLOv8-Pose, 3-signal heuristic | Pose heuristic (aspect ratio / keypoint alignment / hip velocity) gated by a sustained on-ground-posture requirement (≥1.2 s continuous, not a single frame) to reject bending and sitting, plus an optional trained classifier as a corroborating signal | Retrain on real footage; add the YOLO fall detector from `ml/detector/` |
-| **Violence** | CNN+LSTM trained on RWF-2000 | Heuristic over the same pose keypoints: erratic high-velocity wrist/elbow motion between people in close proximity | Swap in a trained temporal model via `VIOLENCE_MODEL_PATH` |
-| **Crowd counting** | CSRNet density-map estimation | YOLOv8 person-class detection and count, smoothed over frames, thresholded per camera | Swap in CSRNet for very dense or occluded scenes |
-| **Abandoned object** | YOLO + DeepSORT | YOLO object detection plus a small centroid tracker | Swap in DeepSORT/ByteTrack for robust ID persistence through occlusion |
+- **Authentication** — bcrypt password hashes; JWTs accepted only in the `Authorization` header on
+  JSON routes; single-use password-reset tokens stored only as SHA-256 hashes, with every other
+  outstanding token invalidated on use.
+- **Authorization** — role checks on every mutating route, plus row-level scoping
+  ([`app/core/scoping.py`](backend/app/core/scoping.py)) so upload-derived alerts, clips and realtime
+  events reach only their owner and operators. The frontend's route guards are UX, not security.
+- **Media tokens** — `<video>`, `<img>` and download URLs carry a token scoped to one resource,
+  valid for 5 minutes, without a role, and refused everywhere else; `token=` values are redacted
+  from every log record.
+- **Uploads** — extension allow-list, a container-signature check on the file's bytes, server-side
+  filenames (no client-controlled paths), a containment check when serving, a request-body limit
+  enforced while the body streams, and a per-user quota.
+- **Abuse limits** — per-IP rate limits on auth endpoints; bounded pagination; bounded concurrent
+  analyses; camera credentials embedded in RTSP URLs are hidden from viewer accounts.
+- **Deployment hygiene** — the startup guard against the default JWT secret, security headers,
+  interactive docs disabled in production, Postgres and Mailpit bound to loopback in Compose, a
+  non-root backend container, and CI scans for committed `.env` files and credential-shaped strings.
+- **Data cleanup** — deleting an upload, recording or user removes its source video, clips,
+  snapshots and per-upload directories.
 
-Other decisions worth calling out:
-
-- **One capture thread per camera, not per viewer** — the naive implementation opens a new
-  `VideoCapture` per connected browser and collapses at three viewers.
-- **Sustained-posture gating over per-frame classification** — a single-frame "on the ground"
-  signal fires constantly on people bending, sitting and crouching. The time gate is what makes
-  the alert stream usable.
-- **Shared detection path for live and uploaded video** — the upload feature runs the production
-  detector against the file's own timeline, so it is a genuine test of the real pipeline.
-- **Notifier interface with real stubs** — `SmsNotifier` and `WhatsAppNotifier` log an explicit
-  "not configured" warning rather than silently no-op, so wiring a real provider later is a config
-  change plus one class, not a call-site rewrite.
-
----
-
-## Security
-
-- **Secrets live in environment variables only.** No credential is committed; every real `.env`
-  is gitignored and only documented `.env.example` templates ship with the repository.
-- **Production start-up guard.** The backend refuses to boot with `ENVIRONMENT=production` while
-  `JWT_SECRET_KEY` is still the insecure default.
-- **Authentication.** JWT with bcrypt-hashed passwords. Password-reset tokens are single-use and
-  stored only as SHA-256 hashes — the raw token exists solely in the email.
-- **Authorization.** Role checks are enforced server-side on every mutating endpoint; the frontend
-  guards are UX, not security.
-- **Rate limiting.** Per-IP sliding-window limits on signup, login, forgot-password and
-  reset-password, all tunable via environment variables.
-- **Dependency auditing.** `pip-audit` and `npm audit` run on every CI build (informational, so a
-  new advisory surfaces for review rather than silently blocking unrelated work).
-- **For production deployments,** use a managed secret store (AWS Secrets Manager, GCP Secret
-  Manager, Vault, or your platform's equivalent) rather than `.env` files on disk, terminate TLS at
-  a reverse proxy, and restrict `CORS_ORIGINS` to your real frontend origins.
-
-Found a vulnerability? Please report it privately — see [SECURITY.md](SECURITY.md). Do not open a
-public issue for security reports.
-
----
-
-## Roadmap
-
-Recently completed:
-
-- [x] **Trained YOLO fall detector integrated as the primary detector**, with a published
-      held-out evaluation — see [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md).
-- [x] **In-video fall timestamps persisted**, so uploaded-video results seek to the exact moment
-      of each detection rather than showing a wall-clock time.
-- [x] **Row-level authorization** on alerts, recordings, analytics and the realtime channel.
-- [x] **Video-level validation framework** — [`ml/validation/`](ml/validation/README.md) evaluates
-      the real production pipeline per *incident* rather than per frame, with a documented
-      matching rule, a threshold sweep and hard-negative attribution. It produces no numbers yet:
-      it is waiting on labelled footage, not on code.
-
-Planned:
-
-- [ ] **Video-level model evaluation** — the largest remaining gap. The *framework* is now
-      built and tested ([`ml/validation/`](ml/validation/README.md)): it drives the real
-      production inference path over labelled clips and reports incident recall, incident
-      precision, false alerts/hour, latency and a threshold sweep. What is missing is the
-      **labelled fall video corpus** — 20–50 clips, roughly half falls and half hard negatives.
-      Until those exist, every published metric remains per-frame on stills and the operational
-      numbers are unmeasured. *Evaluation framework ready; real video validation pending
-      labelled footage.*
-- [ ] **Hard-negative validation** — evaluate against realistic floor-level activity (sit-ups,
-      crouching, a child playing, someone lying on a sofa), none of which the current test split
-      contains. The evaluator groups every false alert by the activity that produced it, so this
-      lands with the corpus above rather than needing separate tooling.
-- [ ] **Inference performance** — batched frame processing and optional GPU acceleration for
-      faster analysis of long recordings. Profiling showed inference is no longer the dominant
-      cost (clip encoding was, and is fixed — see [Performance](#performance)); the remaining
-      ~23 s per 29 s clip is split roughly evenly between the pose model and the fall detector,
-      and MPS/CUDA are unavailable inside the Linux container the stack actually ships.
-- [ ] **Horizontally scalable realtime** — move the rate limiter and event broadcaster to Redis so
-      the backend can run multiple workers or instances.
-- [x] **Pagination** on the alert, recording, upload and admin-user listings — done. Offset
-      paging at the database with a `{items, page, page_size, total, pages}` envelope, ownership
-      filtering applied in SQL before the count, and a primary-key tiebreaker on every sort so a
-      row cannot appear on two pages. See `app/core/pagination.py`.
-- [ ] **Richer analytics** — per-camera heatmaps, time-of-day distributions, exportable reports.
-- [ ] **More notification channels** — SMS and WhatsApp providers behind the existing interfaces.
-- [ ] **Observability** — structured logging, metrics and health dashboards.
-- [ ] **Model version management** — track, compare and roll back deployed detector versions.
-      The artifact + metadata sidecar convention (`fall_detector_v1.pt` alongside
-      `fall_detector_v1.metadata.json`) is the groundwork; a registry and a UI are not.
-- [ ] **Deployment reference** — a documented production deploy (managed Postgres, object storage
-      for clips, TLS termination).
+Limitations: the realtime WebSocket still authenticates with the session token in its handshake
+URL (mitigated by log redaction, identity-scoped delivery and closing the socket at token expiry);
+the rate limiter and broadcaster are in-memory and per-process; and `pip-audit` reports advisories
+in `ecdsa`, `pyasn1` and `python-jose` that do not apply to this app's HS256-only configuration but
+remain unpatched upstream. Several frontend build-time dev dependencies also carry advisories whose
+fixes require major-version upgrades. This project has had local reviews, **not an independent
+security audit**. Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ---
 
 ## Known limitations
 
-Stated plainly, because they matter when reading the rest of this document:
+**Confirmed**
 
-1. **The fall detector raises far too many false alerts on ordinary activity.** This is now
-   measured rather than suspected. Running the production inference path over 20 labelled clips
-   from the [UR Fall Detection Dataset](https://fenix.ur.edu.pl/~mkepski/ds/uf.html) — 10 falls
-   and 10 activities of daily living, same rooms, same camera — gives:
+1. **High false-alert rate.** On the limited video evaluation, 11 of 20 alerts were not falls. The
+   detector is a review aid, not an unattended alarm, and needs retraining with hard negatives
+   (people lying down, sitting, crouching) — see [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md).
+2. **Training data is not deployment data.** The training images are mostly web stills, not
+   care-home or hospital camera footage.
+3. **Analysis is slower than real time on CPU.** A previous measurement (Apple M5, backend limited
+   to 4 CPUs / 4 GB) analysed a 29.3 s, 576×1024 video in a median 36.3 s, plus about 37 s of
+   one-time model loading after a restart. The Linux container has no GPU path.
+4. **Violence and crowd detection are heuristics**, not trained models.
+5. **Live-camera clips are not annotated** with bounding boxes; only upload clips are.
+6. **Single-process design.** The rate limiter and realtime broadcaster are in-memory, so running
+   several backend workers needs a shared store such as Redis.
+7. **`HEAD` requests to media endpoints return 405.** Browsers use ranged `GET`, so playback is
+   unaffected.
 
-   | | |
-   |---|---:|
-   | Incident recall | 90% (9 of 10 falls) |
-   | Median detection latency | 0.66 s |
-   | Incident precision | 45% (9 of 20 alerts) |
-   | **False alerts / hour of ordinary activity** | **574** |
+**Unverified risks**
 
-   Reproduce with `python -m ml.validation.fetch_urfd` then `python -m ml.validation.evaluate`.
-
-   **This is a model limitation, not a tuning problem, and no threshold fixes it.** On the
-   non-fall clips the detector emits a `Fall` box on *more* frames than it does on the real falls
-   (58% vs 25–47%), at confidences that overlap the true positives (0.85 vs 0.87). Raising the
-   confidence floor removes true falls before it removes false ones; lengthening the sustain
-   window removes them in the wrong order too, because a person lying down stays down longer than
-   a person who has fallen. The published metrics (precision 0.846 / recall 0.800 / mAP@50 0.877)
-   remain **per frame, on still images**, and do not survive contact with continuous video of
-   ordinary activity.
-
-   The detector finds falls well and is close to useless at ignoring everything else, so **it is
-   not fit for unattended alerting.** It is usable as a review aid, where a human sees the clip.
-   Fixing it needs retraining with hard negatives, not configuration. See
-   [`ml/MODEL_CARD.md`](ml/MODEL_CARD.md).
-
-   The sample is small (20 clips, 1.8 minutes, one dataset, one viewpoint, two rooms, one
-   subject), so treat the exact figures as indicative. The direction of the result is not
-   subtle enough to be sampling noise.
-
-   **Validation status: evaluation framework ready; independent real-world video validation
-   pending labelled footage.** The framework measures ground truth against predicted events with
-   temporal matching, and reports TP/FP/FN, precision, recall, F1, a threshold sweep,
-   hard-negative analysis, confidence distributions and per-condition breakdowns. What does not
-   exist is the corpus: [`ml/validation/README.md`](ml/validation/README.md) specifies the dataset
-   needed — falls by direction (forward/backward/sideways) and speed (slow/fast), ten required
-   hard-negative activities, and variation across lighting, camera angle, distance, occlusion and
-   resolution. `Corpus.missing_coverage()` checks a corpus against that specification
-   mechanically, and every report prints what is missing on its own front page. The URFD corpus
-   above satisfies **none** of those dimensions, which is why its numbers are labelled indicative
-   rather than validated.
-2. **The realtime WebSocket still carries the session token in its handshake URL.** The media
-   endpoints no longer do — they take a short-lived, resource-scoped media token instead (see
-   [Architecture](#architecture)) — but a WebSocket is opened by the native browser API, which
-   has no header, and it is long-lived, so it cannot re-authenticate per message the way an HTTP
-   request does. Mitigations in place: the socket closes itself at the token's own `exp`, delivery
-   is scoped to that identity, media tokens are refused outright, and `token=` is redacted from
-   every log record. Residual exposure is narrower than it was for media URLs — a WebSocket URL
-   is not a navigation, so it does not enter browser history or generate a `Referer` — but the
-   credential is still a full-privilege one in a URL. Closing it properly needs a scoped,
-   renewable socket token and reconnect handling on the client.
-3. **`HEAD` is not supported on the media endpoints.** They answer `405`, which is FastAPI's
-   default for a `GET`-only route rather than anything specific to streaming. Browsers play video
-   with ranged `GET`s, so playback is unaffected; a client that probes with `HEAD` first (some
-   download managers, some proxies) has to issue a ranged `GET` instead.
-4. **Analysis duration varies with machine load, and is not realtime.** Everything here is
-   CPU-verified with no GPU requirement, so wall-clock analysis time for a given video depends
-   heavily on what else the host is doing — one of six benchmark runs took 54 s where the other
-   five took 35–36 s. See [Performance](#performance) for the measured figures and what is left
-   in them.
-5. **Violence, crowd and abandoned-object detectors are heuristics**, not trained models — a known
-   and documented scope boundary, not an accidental gap.
-6. **Clip annotation covers uploaded video only; live-camera clips are unannotated.** The upload
-   analyser decodes a file with a frame index it can attach observations to, while a camera clip is
-   assembled from a rolling buffer that another thread fills at a different cadence with no
-   per-frame identity. Annotating those would mean threading frame ids through `stream_manager`,
-   which is a change to the realtime capture path rather than to this feature. The annotation layer
-   is also only as good as the detector under it: on footage where the model raises a false alert
-   (see limitation 1), the honest result is a dashed `UNMATCHED` region, and where the pose model
-   never sees the subject at all — a person lying still in the dark — no track id can be offered.
-7. **The earlier keypoint classifier's metrics are optimistic** — small, narrow, largely
-   synthetic dataset; see [`ml/README.md`](ml/README.md). It is off by default and is not the
-   production detector.
-8. **Single-process assumptions.** The in-memory rate limiter and realtime broadcaster are
-   per-process; multi-worker deployment needs a shared backing store.
-9. **E2E coverage boundaries.** The Playwright suite does not cover live-camera streaming (no
-   camera hardware in CI) or a genuine ML-detected fall — its upload fixture is deliberately
-   person-free so the assertion stays honest. Both were verified manually in a real browser.
-10. **Two residual dependency advisories are accepted rather than force-fixed:** `ecdsa` (reachable
-   only via ECDSA JWT algorithms; this app uses HS256 exclusively) and `pyasn1` (pinned by
-   `python-jose`'s own constraint). Both are documented rather than hidden.
-11. **Untested externally:** a real RTSP IP camera (verified against a USB webcam instead), and
-   real SMTP delivery (verified against Mailpit).
+- Upload analysis buffers full-resolution frames for each pending clip; very high-resolution
+  videos with several falls close together could use a lot of memory. Not measured.
+- The YOLO model instances are shared across analysis threads. No divergence was observed when 4
+  analyses ran in parallel, but this is not a guarantee under every load.
+- Real RTSP cameras, SMS/WhatsApp delivery (stubbed) and production deployment have not been
+  exercised.
 
 ---
 
-## Production deployment
+## Roadmap
 
-1. Set `ENVIRONMENT=production` and a real random `JWT_SECRET_KEY` — the app refuses to boot
-   otherwise.
-2. Run `alembic upgrade head` against the production database as a deploy step; do not rely on
-   `create_all`.
-3. Run the backend behind a real ASGI configuration (`uvicorn app.main:app --workers N` behind a
-   reverse proxy). Note that the in-memory rate limiter and realtime broadcaster are per-process —
-   scaling past one worker needs a shared store (see the docstrings in `app/core/rate_limit.py`
-   and `app/services/realtime.py`).
-4. Serve the frontend build (`frontend/dist/`) from a static host or CDN, with `VITE_API_URL`
-   baked in at build time.
-5. Configure real SMTP credentials for `NOTIFICATION_CHANNELS=email`, and set `CORS_ORIGINS` to
-   your real frontend origins.
+Planned work, none of which exists yet:
 
-### External services you will need for full functionality
-
-| Dependency | Needed for | Without it |
-|---|---|---|
-| SMTP credentials | Alert and password-reset email | Logs a warning and continues — everything except delivery works |
-| An RTSP/IP or USB camera | The live-camera pipeline | Video upload and analysis still work end to end |
-| SMS / WhatsApp provider | Those notification channels | Stubs log "not configured"; no silent failures |
-| A GPU | Faster inference and training | Everything here is CPU-verified; a GPU is an optimisation, not a requirement |
+- Retrain the fall detector with hard negatives and evaluate it on a larger, more varied labelled
+  video corpus ([specification](ml/validation/README.md)).
+- GPU or batched inference for faster analysis of long recordings.
+- A Redis-backed rate limiter and broadcaster for multi-worker deployments.
+- A renewable, scoped WebSocket token to replace the session token in the handshake URL.
+- Bounding-box annotation for live-camera clips.
+- SMS/WhatsApp providers behind the existing notifier interface.
+- A documented production deployment reference (managed Postgres, object storage, TLS).
 
 ---
 
-## Troubleshooting
+## Repository structure
 
-| Symptom | Cause and fix |
-|---|---|
-| `JWT_SECRET_KEY is still set to its insecure default` on boot | `ENVIRONMENT=production` with the placeholder secret. Generate one: `python3 -c "import secrets; print(secrets.token_hex(32))"` |
-| `alembic upgrade head` fails on a fresh database | `DATABASE_URL` must point at a database that already exists (`createdb sentinelcam`) with table-creation privileges |
-| Live camera stream never loads | Check the camera `url` (numeric string for a USB index, full `rtsp://…` for IP) and the backend log for `cv2.VideoCapture` open failures. The tile degrades to "Stream unavailable" rather than breaking the page |
-| Recording won't play in Safari | Check which codec the backend logged — `mp4v` (the fallback) is far less broadly compatible than `avc1` |
-| Uploaded video stuck at "processing" | `video_analysis.py` records real failures as `status=failed` with an `error_message`, so a genuinely *stuck* item is usually a long file still processing on CPU |
-| Realtime badge stays on "Reconnecting" | The WebSocket uses the same JWT as everything else — check expiry, then the backend log for the `/api/ws/events` connection attempt |
-| `pytest` fails with a connection error | `createdb sentinelcam_test` first; the suite needs a real reachable Postgres at the `DATABASE_URL` its `conftest.py` defaults to |
+```text
+SentinelCam/
+├── backend/                     FastAPI service
+│   ├── app/
+│   │   ├── api/routes/          auth, cameras, alerts, recordings, video_uploads,
+│   │   │                        analytics, admin, realtime, system
+│   │   ├── core/                security, dependencies, scoping, pagination,
+│   │   │                        rate limiting, HTTP hardening, log redaction
+│   │   ├── models/ schemas/     SQLAlchemy models and Pydantic schemas
+│   │   └── services/            stream manager, recording engine, video analysis,
+│   │       ├── detection/       fall pipeline, trained detector, pose heuristic,
+│   │       │                    tracking and clip annotation, crowd, violence
+│   │       └── notifications/   email notifier and SMS/WhatsApp stubs
+│   ├── alembic/                 database migrations
+│   ├── scripts/                 retention cleanup, codec backfill, E2E seeding
+│   └── tests/                   pytest suite (real PostgreSQL)
+├── frontend/                    React + Vite SPA (pages, components, stores, lib)
+├── e2e/                         Playwright suite and fixtures
+├── ml/                          training and evaluation pipeline (not imported by the app)
+│   ├── detector/                dataset download, analysis, preparation, training
+│   ├── validation/              video-level evaluation framework
+│   ├── exported/                committed model artifacts and metadata
+│   ├── reports/                 evaluation reports and training curves
+│   └── MODEL_CARD.md
+├── docs/images/                 README screenshots and architecture diagram
+├── .github/workflows/ci.yml     CI pipeline
+├── docker-compose.yml           postgres · mailpit · backend · frontend
+└── .env.example                 configuration template
+```
+
+Datasets, training runs, logs and base YOLO weights are deliberately **not** in Git — see
+[`ml/README.md`](ml/README.md) for how to recreate them.
 
 ---
 
-## Contributing
+## License and acknowledgments
 
-Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the development
-setup, coding conventions, commit-message format and the checks a pull request must pass.
+SentinelCam's own code is released under the [MIT License](LICENSE). Third-party components keep
+their own terms, which the MIT license does not override — see [NOTICE.md](NOTICE.md):
 
-## License
+- **Ultralytics YOLOv8** is licensed under **AGPL-3.0**; `fall_detector_v1.pt` is fine-tuned from
+  Ultralytics weights. Review Ultralytics' licensing before any commercial use.
+- The fall-detection training data is the Roboflow `tfmbigdata2025/voc-fall-person_falls` export,
+  **CC BY 4.0**.
+- The video evaluation uses the **UR Fall Detection Dataset** (Kwolek & Kępski, 2014), CC BY-NC-SA
+  4.0. It is downloaded locally by the evaluation scripts and is not redistributed here.
 
-Released under the [MIT License](LICENSE).
-
-Third-party models and datasets carry their own licences — in particular, Ultralytics YOLOv8 is
-AGPL-3.0 licensed, and the fall-detection dataset is governed by the terms of its Roboflow export.
-See [NOTICE.md](NOTICE.md) and review those terms separately before any commercial use.
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).

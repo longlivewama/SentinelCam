@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -22,15 +23,39 @@ from app.models.video_upload import VideoUpload
 logger = logging.getLogger(__name__)
 
 
+def snapshot_path_for_clip(
+    clip_filename: str, camera_id: Optional[int] = None, video_upload_id: Optional[int] = None,
+) -> Path:
+    """Where the alert snapshot JPEG for one event clip lives.
+
+    The snapshot's path is not stored on the Recording row, so the writers
+    (recording_engine, video_analysis) and every deleter derive it from the
+    clip's filename through this one function. Before it existed the name
+    was spelled inline at each writer and no delete path knew it at all:
+    every snapshot - a frame of someone's footage - outlived its clip,
+    its upload and its owner's account."""
+    prefix = f"upload{video_upload_id}" if video_upload_id is not None else str(camera_id)
+    return Path(settings.SNAPSHOTS_DIR) / f"{prefix}_{Path(clip_filename).stem}.jpg"
+
+
+def recording_snapshot_path(recording: Recording) -> str:
+    return str(snapshot_path_for_clip(
+        recording.filename, camera_id=recording.camera_id, video_upload_id=recording.video_upload_id,
+    ))
+
+
 def stage_delete_video_upload(db: Session, upload: VideoUpload) -> List[str]:
     """Stages deletion of a VideoUpload and everything derived from it
     (its Events and Recordings - which have no independent meaning
     without the source upload) within the given session, WITHOUT
-    committing. Returns the on-disk file paths (recording clips + the
-    source video itself) the caller should remove after a successful
-    commit."""
+    committing. Returns the on-disk file paths (recording clips, their
+    snapshots, and the source video itself) the caller should remove
+    after a successful commit."""
     recordings = db.query(Recording).filter(Recording.video_upload_id == upload.id).all()
-    paths = [r.file_path for r in recordings]
+    paths = []
+    for recording in recordings:
+        paths.append(recording.file_path)
+        paths.append(recording_snapshot_path(recording))
 
     db.query(Event).filter(Event.video_upload_id == upload.id).delete()
     db.query(Recording).filter(Recording.video_upload_id == upload.id).delete()
@@ -40,12 +65,16 @@ def stage_delete_video_upload(db: Session, upload: VideoUpload) -> List[str]:
     return paths
 
 
-def stage_delete_recording(db: Session, recording: Recording) -> None:
+def stage_delete_recording(db: Session, recording: Recording) -> List[str]:
     """Stages deletion of a single Recording, preserving any Event that
     references it (a live-camera alert's history is meaningful even after
-    its clip is pruned) by clearing recording_id rather than cascading."""
+    its clip is pruned) by clearing recording_id rather than cascading.
+    Returns the on-disk paths (the clip and its snapshot) the caller
+    should remove after a successful commit."""
+    paths = [recording.file_path, recording_snapshot_path(recording)]
     db.query(Event).filter(Event.recording_id == recording.id).update({"recording_id": None})
     db.delete(recording)
+    return paths
 
 
 def unlink_user_from_acknowledged_alerts(db: Session, user_id: int) -> None:

@@ -67,6 +67,21 @@ describe('media access', () => {
       expect(screen.queryByText(/could not be played/i)).not.toBeInTheDocument()
     })
 
+    it('reports the failure when the re-minted token is identical to the failed one', async () => {
+      // The backend's JWT timestamps have one-second resolution, so a token
+      // minted right after the first is the same string. An undecodable
+      // file fails within that second - and with an unchanged src the
+      // <video> never reloads, so no second error ever came.
+      apiClient.post.mockResolvedValue({ data: { token: 'same-second', expires_in: 300 } })
+      render(<MediaVideo kind="upload" id={7} />)
+      await waitFor(() => expect(document.querySelector('video')).not.toBeNull())
+
+      fireEvent.error(document.querySelector('video'))
+
+      expect(await screen.findByText(/could not be played/i)).toBeInTheDocument()
+      expect(apiClient.post).toHaveBeenCalledTimes(2)
+    })
+
     it('reports the failure when a fresh token does not help', async () => {
       mintsTokens()
       render(<MediaVideo kind="recording" id={42} />)

@@ -37,6 +37,7 @@ from app.database import SessionLocal
 from app.models.camera import Camera
 from app.models.event import Event
 from app.models.recording import Recording
+from app.services.cascade_delete import snapshot_path_for_clip
 from app.services.notifications import notification_service
 from app.services.realtime import realtime_broadcaster
 from app.services.stream_manager import stream_manager
@@ -215,10 +216,9 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
     # pre-event frame (falls back to the first post-event frame if the
     # rolling buffer happened to be empty).
     snapshot_frame = pre_frames[-1] if pre_frames else all_frames[0]
-    snapshots_dir = Path(settings.SNAPSHOTS_DIR)
-    snapshots_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_filename = f"{camera_id}_{ts_str}_{trigger_action}.jpg"
-    snapshot_path = snapshots_dir / snapshot_filename
+    # Named through cascade_delete so deleting the recording finds it again.
+    snapshot_path = snapshot_path_for_clip(filename, camera_id=camera_id)
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(snapshot_path), snapshot_frame)
 
     logger.info(

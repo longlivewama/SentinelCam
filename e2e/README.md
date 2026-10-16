@@ -30,6 +30,31 @@ application's own, so the seeder refuses to run without an explicit
 rather than the seeder by hand unless you mean to discard whatever the
 stack currently holds.
 
+### Keeping your development data safe
+
+`npm test` targets the **default** Compose project — the same one
+`docker compose up` in the repo root starts. On a machine where that stack
+holds data you care about, isolate the run in one of two ways:
+
+- **A separate Compose project** with its own volumes and ports. Every value
+  below is read from the shell, which takes precedence over the root `.env`:
+
+  ```bash
+  COMPOSE_PROJECT_NAME=sentinelcam-e2e \
+  BACKEND_PORT=8110 FRONTEND_PORT=5283 POSTGRES_PORT=5545 \
+  MAILPIT_SMTP_PORT=1135 MAILPIT_WEB_PORT=8135 \
+  VITE_API_URL=http://localhost:8110 CORS_ORIGINS=http://localhost:5283 \
+  FRONTEND_URL=http://localhost:5283 \
+  E2E_BASE_URL=http://localhost:5283 E2E_MAILPIT_URL=http://localhost:8135 \
+  npm test
+  # afterwards: COMPOSE_PROJECT_NAME=sentinelcam-e2e docker compose down -v
+  ```
+
+- **`E2E_SKIP_DOCKER=1` against a scratch database** (next section). Set
+  `DATABASE_URL` explicitly to that scratch database when running `npm test`:
+  the seeder wipes whatever `DATABASE_URL` resolves to, and otherwise that is
+  whatever `backend/.env` says.
+
 View the HTML report after a run:
 
 ```bash
@@ -48,15 +73,23 @@ DATABASE_URL=postgresql://sentinelcam:sentinelcam@localhost:5433/sentinelcam_e2e
   AUTH_SIGNUP_MAX_REQUESTS=1000 AUTH_LOGIN_MAX_REQUESTS=1000 \
   AUTH_FORGOT_PASSWORD_MAX_REQUESTS=1000 AUTH_RESET_PASSWORD_MAX_REQUESTS=1000 \
   NOTIFICATION_CHANNELS=email SMTP_HOST=localhost SMTP_PORT=1025 SMTP_USE_TLS=false \
+  SMTP_USER= SMTP_PASSWORD= \
   uvicorn app.main:app --reload
 
 # Terminal 2: a local Mailpit (or `docker run -p 1025:1025 -p 8025:8025 axllent/mailpit`)
 # Terminal 3: frontend as usual
 cd frontend && npm run dev
 
-# Terminal 4
-cd e2e && E2E_SKIP_DOCKER=1 npm test
+# Terminal 4 - the same DATABASE_URL as Terminal 1, so the seeder wipes the
+# throwaway database and nothing else
+cd e2e && E2E_SKIP_DOCKER=1 \
+  DATABASE_URL=postgresql://sentinelcam:sentinelcam@localhost:5433/sentinelcam_e2e \
+  npm test
 ```
+
+`SMTP_USER=` / `SMTP_PASSWORD=` are blanked on purpose: if `backend/.env`
+holds real SMTP credentials the backend attempts SMTP AUTH, which Mailpit
+rejects, and the password-reset test then times out waiting for an email.
 
 `E2E_SKIP_DOCKER=1` skips the `docker compose up`/`down` calls and seeds
 fixtures directly via the local backend venv instead of `docker compose

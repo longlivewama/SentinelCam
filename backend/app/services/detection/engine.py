@@ -87,10 +87,12 @@ class DetectionEngine:
         """Idempotent: safe to call repeatedly (e.g. on every camera
         update). Starts a detection thread only if one isn't already
         running for this camera."""
+        # Before the early return: an already-running loop still needs its
+        # stream swapped if the camera's URL was just edited.
+        stream_manager.get_or_create(camera_id, url)
         existing = self._threads.get(camera_id)
         if existing is not None and existing.is_alive():
             return
-        stream_manager.get_or_create(camera_id, url)
         stop_flag = threading.Event()
         self._stop_flags[camera_id] = stop_flag
         thread = threading.Thread(
@@ -108,10 +110,6 @@ class DetectionEngine:
 
     def _run_loop(self, camera_id: int, stop_flag: threading.Event):
         self.ensure_models()
-        stream = stream_manager.get(camera_id)
-        if stream is None:
-            logger.error("No stream for camera %s; detection loop exiting", camera_id)
-            return
 
         fall_pipeline = FallPipeline()
         logger.info("Camera %s: fall detection running in %r mode", camera_id, fall_pipeline.mode)
@@ -128,6 +126,15 @@ class DetectionEngine:
                     logger.info("Camera %s detection disabled/removed; stopping detection loop", camera_id)
                     return
                 crowd_threshold = camera.crowd_threshold
+
+            # Looked up every iteration rather than once: editing the
+            # camera's URL replaces its stream (see stream_manager), and a
+            # reference held from startup would keep reading the stopped
+            # one's last frame forever.
+            stream = stream_manager.get(camera_id)
+            if stream is None:
+                logger.error("No stream for camera %s; detection loop exiting", camera_id)
+                return
 
             frame = stream.get_latest_frame()
             if frame is None:
