@@ -69,6 +69,12 @@ htmlcov/
 /ml/data/validation/
 /ml/reports/fall_detector_video_validation.md
 /ml/reports/fall_detector_video_validation.json
+# Abandoned-object experiment datasets (several GB of downloaded and
+# derived images) - local only, like every other dataset under ml/data/.
+/ml/data/abandoned_object*/
+# Base YOLO weights that Ultralytics downloads next to whichever ML script
+# first asks for them. Only ml/exported/ holds committed weights.
+/ml/scripts/**/*.pt
 
 # --- Misc ---
 *.log

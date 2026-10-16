@@ -45,7 +45,13 @@ export default function MediaVideo({
     }
     retried.current = true
     const fresh = await refresh()
-    if (!fresh) setFailed(true)
+    // A media token minted in the same second as the one that just failed
+    // is byte-for-byte identical (JWT timestamps are whole seconds). The
+    // src then does not change, the element never reloads, no second
+    // `error` arrives - and the player sat blank forever, which is the
+    // exact symptom this component exists to prevent. The same token
+    // also means the token was not the problem, so report it now.
+    if (!fresh || fresh === token) setFailed(true)
   }
 
   if (failed || tokenError) {
