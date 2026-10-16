@@ -11,7 +11,11 @@ from app.models.password_reset_token import PasswordResetToken
 from app.models.user import User
 from app.models.video_upload import STATUS_PENDING, STATUS_PROCESSING, VideoUpload
 from app.schemas.user import UserCreate, UserOut, UserUpdateRole
-from app.services.cascade_delete import stage_delete_video_upload, unlink_user_from_acknowledged_alerts
+from app.services.cascade_delete import (
+    remove_upload_clip_dir,
+    stage_delete_video_upload,
+    unlink_user_from_acknowledged_alerts,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -101,11 +105,19 @@ def delete_user(
     # the attribution), and any password reset tokens are meaningless
     # without the account.
     file_paths = []
+    upload_ids = []
     for upload in db.query(VideoUpload).filter(VideoUpload.user_id == user_id).all():
+        upload_ids.append(upload.id)
         file_paths.extend(stage_delete_video_upload(db, upload))
     unlink_user_from_acknowledged_alerts(db, user_id)
     db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id).delete()
 
+    # The models declare no relationship() between users and
+    # video_uploads, so the unit of work has nothing to order the staged
+    # upload DELETEs before the user's by - and it may emit the user's
+    # first, which the video_uploads.user_id FK rejects. Flushing here
+    # sends the dependent deletes before the user row is touched.
+    db.flush()
     db.delete(user)
     db.commit()
 
@@ -115,6 +127,8 @@ def delete_user(
                 os.remove(path)
             except OSError:
                 pass
+    for upload_id in upload_ids:
+        remove_upload_clip_dir(upload_id)
 
     return None
 

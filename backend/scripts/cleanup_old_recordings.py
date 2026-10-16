@@ -19,8 +19,8 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.database import SessionLocal  # noqa: E402
-from app.models.event import Event  # noqa: E402
 from app.models.recording import Recording  # noqa: E402
+from app.services.cascade_delete import stage_delete_recording  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,17 +54,19 @@ def main():
             file_path = recording.file_path
 
             # The alert history (Event rows) is kept even after its video
-            # clip is pruned - only the recording_id link is cleared, so
-            # deleting the Recording doesn't hit the FK constraint.
-            db.query(Event).filter(Event.recording_id == recording.id).update({"recording_id": None})
-            db.delete(recording)
+            # clip is pruned - stage_delete_recording only clears the
+            # recording_id link, so deleting the Recording doesn't hit the
+            # FK constraint. It also returns the clip's snapshot, which
+            # would otherwise outlive the retention window indefinitely.
+            paths = stage_delete_recording(db, recording)
             db.commit()
 
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    logger.exception("Failed to remove file %s for deleted recording %d", file_path, recording.id)
+            for path in paths:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        logger.exception("Failed to remove file %s for deleted recording %d", path, recording.id)
 
             logger.info("Deleted recording %d: %s", recording.id, file_path)
 

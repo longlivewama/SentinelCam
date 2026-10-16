@@ -146,9 +146,13 @@ matrix.
 
 - **Recordings/snapshots/uploads** are written to `storage/{recordings,snapshots,uploads}/` under
   `backend/` by default (configurable via `RECORDINGS_DIR` / `SNAPSHOTS_DIR` / `UPLOADS_DIR`).
-- **Video codec**: recordings are written with the `avc1` (H.264) fourcc first, falling back to
-  `mp4v` if the local OpenCV/ffmpeg build can't open an H.264 encoder; check server logs for which
-  codec was used for a given recording.
+- **Video codec**: clips are written through a codec ladder in
+  `app/services/recording_engine.py` — `avc1` (H.264, `.mp4`), then `VP80` (VP8, `.webm`), then
+  `vp09` (VP9, `.webm`), and `mp4v` only as a last resort that browsers cannot play. The first one
+  the local OpenCV/FFmpeg build can open wins; the server log records which was used.
+- **Snapshots** are named from their clip (`app/services/cascade_delete.py`'s
+  `snapshot_path_for_clip`), so deleting an upload, a recording or a user — or running
+  `scripts/cleanup_old_recordings.py` — removes them along with the clip.
 - **YOLO model weights** (`yolov8n-pose.pt`, `yolov8n.pt`) are downloaded automatically by
   `ultralytics` on first use if not already present locally, and are gitignored.
 - **Fall detection** (`app/services/detection/fall_detection.py`) requires a sustained on-ground

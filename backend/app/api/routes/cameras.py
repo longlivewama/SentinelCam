@@ -1,8 +1,8 @@
-import time
+import asyncio
 from datetime import datetime, timezone
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -53,6 +53,13 @@ def _sync_detection_state(camera: Camera):
         detection_engine.ensure_running(camera.id, camera.url)
     else:
         detection_engine.stop(camera.id)
+        # Someone may be watching with detection off; an edited URL has to
+        # reach their capture thread too (get_or_create restarts it). Only
+        # a live thread on the old URL - a stopped one stays stopped and
+        # starts lazily as before.
+        stream = stream_manager.get(camera.id)
+        if stream is not None and stream.is_alive and stream.url != camera.url:
+            stream_manager.get_or_create(camera.id, camera.url)
 
 
 def _visible_camera(camera: Camera, user: User) -> CameraOut:
@@ -164,6 +171,7 @@ def create_camera_media_token(
 @router.get("/{camera_id}/stream")
 def stream_camera(
     camera_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(_media_access),
 ):
@@ -173,12 +181,35 @@ def stream_camera(
 
     # Lazily start (or reuse) the single capture thread for this camera.
     stream = stream_manager.get_or_create(camera.id, camera.url)
+    camera_id = camera.id
 
-    def generate():
+    # Hand the request's database connection back before streaming. The
+    # session would otherwise stay checked out (idle in transaction) for
+    # as long as anyone watches - so the connection pool's 15 slots capped
+    # live views across the whole deployment, and the 16th viewer, or any
+    # other request needing the database, hung until one closed. Nothing
+    # below touches the database.
+    db.close()
+
+    # Async, not a sync generator: Starlette runs a sync iterator's next()
+    # on a worker thread, and while a camera has no frame (offline,
+    # unreachable) that next() never returned - so the thread, plus the
+    # connection above, leaked for the life of the process.
+    #
+    # The explicit disconnect check is the other half. Under ASGI 2.4+
+    # (current uvicorn) Starlette learns a client left only when a send
+    # fails, and a camera with no frame never sends - so without it every
+    # abandoned view of an offline camera looped forever, and uvicorn's
+    # graceful shutdown waited on those loops indefinitely.
+    async def generate():
         interval = 1.0 / max(settings.STREAM_FPS, 1)
         boundary = b"--frame"
-        while True:
-            jpeg = stream.get_latest_jpeg()
+        current = stream
+        while not await request.is_disconnected():
+            # Follow a stream swapped in by an edit to the camera's URL,
+            # rather than replaying the stopped one's last frame.
+            current = stream_manager.get(camera_id) or current
+            jpeg = current.get_latest_jpeg()
             if jpeg is not None:
                 yield (
                     boundary + b"\r\n"
@@ -186,6 +217,6 @@ def stream_camera(
                     b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n" +
                     jpeg + b"\r\n"
                 )
-            time.sleep(interval)
+            await asyncio.sleep(interval)
 
     return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")

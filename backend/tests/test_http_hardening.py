@@ -101,3 +101,64 @@ def test_the_docs_are_not_mounted_in_production(path, monkeypatch):
         # it was, with the test environment's settings.
         monkeypatch.undo()
         importlib.reload(main_module)
+
+
+# --- request body limit ---------------------------------------------------
+
+def _body_limited_app(limit):
+    from fastapi import FastAPI, Request
+
+    from app.core.http_hardening import RequestBodyLimitMiddleware
+
+    seen = {"route_ran": False}
+    app = FastAPI()
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=limit)
+
+    @app.post("/echo")
+    async def echo(request: Request):
+        seen["route_ran"] = True
+        return {"size": len(await request.body())}
+
+    return app, seen
+
+
+def test_a_declared_oversized_body_is_refused_before_the_route_runs():
+    """The bug: the whole body was stored before anything said no."""
+    app, seen = _body_limited_app(100)
+    response = TestClient(app).post("/echo", content=b"x" * 101)
+    assert response.status_code == 413
+    assert seen["route_ran"] is False
+
+
+def test_a_chunked_body_is_cut_off_once_it_streams_past_the_limit():
+    """No Content-Length to check up front, so it has to be counted."""
+    app, _ = _body_limited_app(100)
+
+    def chunks():
+        for _ in range(10):
+            yield b"x" * 50
+
+    response = TestClient(app).post("/echo", content=chunks())
+    assert response.status_code == 413
+
+
+def test_a_body_within_the_limit_is_untouched():
+    app, _ = _body_limited_app(100)
+    response = TestClient(app).post("/echo", content=b"x" * 100)
+    assert response.status_code == 200
+    assert response.json() == {"size": 100}
+
+
+def test_the_application_refuses_a_body_far_beyond_the_upload_limit(client, viewer_headers):
+    """Wired into the real app: a declared size past the upload limit is
+    refused outright, with the security headers still attached."""
+    from app.config import settings
+
+    oversized = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024 * 2
+    response = client.post(
+        "/api/video-uploads",
+        headers={**viewer_headers, "Content-Length": str(oversized), "Content-Type": "multipart/form-data; boundary=B"},
+        content=b"--B--\r\n",
+    )
+    assert response.status_code == 413
+    assert response.headers.get("X-Content-Type-Options") == "nosniff"

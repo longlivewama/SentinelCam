@@ -88,10 +88,6 @@ class FallPipeline:
         # nothing here feeds back into a detection decision.
         self.last_fall_boxes: tuple = ()
 
-    @property
-    def uses_trained_model(self) -> bool:
-        return self._model_gate is not None
-
     def update(self, frame, people, now: Optional[float] = None) -> List[dict]:
         """Runs whichever strategies are enabled over one processed frame
         and returns the fall events they produced. `people` is the pose
