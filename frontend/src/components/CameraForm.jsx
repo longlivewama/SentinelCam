@@ -7,7 +7,6 @@ const DEFAULTS = {
   location: '',
   ai_detection_enabled: false,
   crowd_threshold: 10,
-  abandoned_object_seconds: 30,
   status: 'active',
   is_active: true,
 }
@@ -33,7 +32,6 @@ export default function CameraForm({
       const payload = {
         ...values,
         crowd_threshold: Number(values.crowd_threshold),
-        abandoned_object_seconds: Number(values.abandoned_object_seconds),
       }
       await onSubmit(payload)
     } catch (err) {
@@ -122,6 +120,8 @@ export default function CameraForm({
         Enable AI Detection
       </label>
 
+      {/* No abandoned-object setting: that detector was removed from the
+          live pipeline, so a field for it would configure nothing. */}
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label htmlFor="camera-form-crowd-threshold" className="sc-label">Crowd Threshold</label>
@@ -132,17 +132,6 @@ export default function CameraForm({
             className="sc-input"
             value={values.crowd_threshold}
             onChange={(e) => update('crowd_threshold', e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="camera-form-abandoned-seconds" className="sc-label">Abandoned Object (sec)</label>
-          <input
-            id="camera-form-abandoned-seconds"
-            type="number"
-            min="0"
-            className="sc-input"
-            value={values.abandoned_object_seconds}
-            onChange={(e) => update('abandoned_object_seconds', e.target.value)}
           />
         </div>
       </div>

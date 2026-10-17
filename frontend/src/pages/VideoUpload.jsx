@@ -2,10 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import apiClient from '../api/client'
 import MediaVideo from '../components/MediaVideo'
 import Modal from '../components/Modal'
+import OverlayControls from '../components/OverlayControls'
 import Pagination from '../components/Pagination'
+import TrackTimeline from '../components/TrackTimeline'
+import TrackingVideoOverlay from '../components/TrackingVideoOverlay'
 import { toast } from '../store/toastStore'
 import { onRealtimeEvent } from '../lib/realtime'
 import { detectorMeta, formatBytes, formatDateTime, formatVideoTimestamp } from '../lib/format'
+import { describePoseEvidence, useOverlayOptions } from '../lib/poseOverlay'
 import { ALLOWED_VIDEO_EXTENSIONS, MAX_UPLOAD_SIZE_MB, validateVideoFile } from '../lib/videoValidation'
 
 const STATUS_STYLES = {
@@ -42,6 +46,31 @@ function UploadDetailModal({ upload, onClose }) {
   const [fallEvents, setFallEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
+  // Pose + tracking record for this analysis: 'loading' | 'ready' | 'none'
+  // (analysed before the feature, or with tracking off) | 'error'.
+  const [tracking, setTracking] = useState({ status: 'loading', data: null })
+  const [overlayOptions, toggleOverlayOption] = useOverlayOptions()
+
+  useEffect(() => {
+    if (upload.status !== 'completed') {
+      setTracking({ status: 'none', data: null })
+      return undefined
+    }
+    let cancelled = false
+    setTracking({ status: 'loading', data: null })
+    apiClient
+      .get(`/api/video-uploads/${upload.id}/tracking`)
+      .then(({ data }) => {
+        if (!cancelled) setTracking({ status: 'ready', data })
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setTracking({ status: error?.response?.status === 404 ? 'none' : 'error', data: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [upload.id, upload.status])
 
   useEffect(() => {
     let cancelled = false
@@ -94,6 +123,14 @@ function UploadDetailModal({ upload, onClose }) {
   }
 
   const recordingsById = new Map(recordings.map((rec) => [rec.id, rec]))
+  const trackingData = tracking.status === 'ready' ? tracking.data : null
+  // Which tracked person each fall was attributed to, and the pose evidence
+  // recorded for them, by event id.
+  const fallEvidenceByEventId = new Map(
+    (trackingData?.fall_events || [])
+      .filter((fall) => fall.event_id !== null && fall.event_id !== undefined)
+      .map((fall) => [fall.event_id, fall]),
+  )
   // Oldest-first so the numbering below reads in the order the falls
   // occurred. Sort by position in the FOOTAGE where we have it, falling
   // back to detection order for older rows recorded before that column
@@ -110,28 +147,23 @@ function UploadDetailModal({ upload, onClose }) {
     (rec) => !orderedEvents.some((evt) => evt.recording_id === rec.id),
   )
 
+  const summary = [
+    { label: 'Status', value: upload.status, className: 'capitalize' },
+    { label: 'Persons detected', value: upload.persons_detected ?? '—', title: 'Most people visible in any one processed frame' },
+    { label: 'Fall events', value: upload.fall_events_count ?? '—' },
+    { label: 'Duration', value: upload.duration_seconds ? `${upload.duration_seconds.toFixed(1)}s` : '—' },
+  ]
+
   return (
-    <Modal title={upload.original_filename} onClose={onClose} maxWidth="max-w-2xl">
-      <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div>
-          <p className="sc-label">Status</p>
-          <p className="text-sm capitalize text-slate-200">{upload.status}</p>
-        </div>
-        <div>
-          <p className="sc-label">Persons detected</p>
-          <p className="text-sm text-slate-200">{upload.persons_detected}</p>
-        </div>
-        <div>
-          <p className="sc-label">Fall events</p>
-          <p className="text-sm text-slate-200">{upload.fall_events_count}</p>
-        </div>
-        <div>
-          <p className="sc-label">Duration</p>
-          <p className="text-sm text-slate-200">
-            {upload.duration_seconds ? `${upload.duration_seconds.toFixed(1)}s` : '—'}
-          </p>
-        </div>
-      </div>
+    <Modal title={upload.original_filename} onClose={onClose} maxWidth="max-w-6xl">
+      <dl className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {summary.map((item) => (
+          <div key={item.label} className="rounded-lg border border-surface-700 bg-surface-850 px-3 py-2" title={item.title}>
+            <dt className="sc-label mb-0.5">{item.label}</dt>
+            <dd className={`text-sm font-medium text-slate-100 ${item.className || ''}`}>{item.value}</dd>
+          </div>
+        ))}
+      </dl>
 
       {upload.status === 'failed' && (
         <div className="mb-4 rounded-lg border border-status-error/30 bg-status-error/10 px-4 py-3 text-sm text-red-300">
@@ -142,87 +174,145 @@ function UploadDetailModal({ upload, onClose }) {
         </div>
       )}
 
-      <div className="mb-4">
-        <p className="sc-label mb-2">Source video</p>
-        <MediaVideo kind="upload" id={upload.id} videoRef={sourceVideoRef} />
-      </div>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_21rem]">
+        <section aria-label="Source video and tracking" className="min-w-0">
+          <p className="sc-label mb-2">Source video</p>
+          <MediaVideo
+            kind="upload"
+            id={upload.id}
+            videoRef={sourceVideoRef}
+            overlay={
+              trackingData ? (
+                <TrackingVideoOverlay videoRef={sourceVideoRef} tracking={trackingData} options={overlayOptions} />
+              ) : null
+            }
+          />
+          <div className="mt-3">
+            {tracking.status === 'loading' && (
+              <p className="text-xs text-slate-500">Loading pose and tracking results…</p>
+            )}
+            {tracking.status === 'error' && (
+              <p className="text-xs text-red-300">Could not load the pose and tracking results for this video.</p>
+            )}
+            {tracking.status === 'none' && upload.status === 'completed' && (
+              <p className="text-xs text-slate-500">
+                No pose or tracking results for this analysis - it ran before this feature existed or with
+                tracking turned off. Re-upload the video to generate them.
+              </p>
+            )}
+            {trackingData && (
+              <OverlayControls options={overlayOptions} onToggle={toggleOverlayOption} />
+            )}
+          </div>
 
-      <p className="sc-label mb-2">Fall event clips</p>
-      {loading ? (
-        <p className="text-sm text-slate-500">Loading…</p>
-      ) : loadError ? (
-        <p className="text-sm text-red-300">{loadError}</p>
-      ) : orderedEvents.length === 0 && recordings.length === 0 ? (
-        <p className="text-sm text-slate-500">
-          {upload.status === 'completed'
-            ? 'No fall events detected.'
-            : upload.status === 'failed'
-              ? 'Analysis failed before any results were produced.'
-              : 'Processing not finished yet.'}
-        </p>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {orderedEvents.map((event, index) => {
-            const recording = recordingsById.get(event.recording_id)
-            const videoTime = formatVideoTimestamp(event.video_timestamp_seconds)
-            const detector = detectorMeta(event.detector)
-            const confidencePercent = Math.round((event.confidence_score ?? 0) * 100)
-            return (
-              <div key={event.id} className="rounded-lg border border-surface-800 p-3">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium text-slate-200">Fall {index + 1}</p>
-                    {videoTime ? (
-                      <button
-                        type="button"
-                        onClick={() => seekTo(event.video_timestamp_seconds)}
-                        title="Jump the source video to this moment"
-                        className="sc-badge border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20"
+          {trackingData && (
+            <div className="mt-5 border-t border-surface-800 pt-4">
+              <p className="sc-label mb-2">People tracked</p>
+              <TrackTimeline tracking={trackingData} duration={upload.duration_seconds} onSeek={seekTo} />
+            </div>
+          )}
+        </section>
+
+        <aside aria-label="Fall events" className="min-w-0 lg:border-l lg:border-surface-800 lg:pl-6">
+          <p className="sc-label mb-1">Fall events</p>
+          <p className="mb-3 text-xs text-slate-500">
+            Each event is a detector lead for review, not a confirmed fall.
+          </p>
+          {loading ? (
+            <p className="text-sm text-slate-500">Loading…</p>
+          ) : loadError ? (
+            <p className="text-sm text-red-300">{loadError}</p>
+          ) : orderedEvents.length === 0 && recordings.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-surface-700 px-4 py-6 text-center text-sm text-slate-500">
+              {upload.status === 'completed'
+                ? 'No fall events detected.'
+                : upload.status === 'failed'
+                  ? 'Analysis failed before any results were produced.'
+                  : 'Processing not finished yet.'}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {orderedEvents.map((event, index) => {
+                const recording = recordingsById.get(event.recording_id)
+                const videoTime = formatVideoTimestamp(event.video_timestamp_seconds)
+                const detector = detectorMeta(event.detector)
+                const confidencePercent = Math.round((event.confidence_score ?? 0) * 100)
+                const evidence = fallEvidenceByEventId.get(event.id)
+                const personId = evidence?.person_track_id
+                const poseNote = describePoseEvidence(evidence?.pose)
+                return (
+                  <article key={event.id} className="rounded-lg border border-surface-700 bg-surface-850 p-3">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-sm font-semibold text-slate-100">Fall {index + 1}</h3>
+                      {videoTime ? (
+                        <button
+                          type="button"
+                          onClick={() => seekTo(event.video_timestamp_seconds)}
+                          title="Jump the source video to this moment"
+                          className="sc-badge border border-accent-cyan/30 bg-accent-cyan/10 text-accent-cyan hover:bg-accent-cyan/20"
+                        >
+                          at {videoTime} in video
+                        </button>
+                      ) : (
+                        <span
+                          className="sc-badge border border-surface-600 bg-surface-800 text-slate-500"
+                          title="This analysis predates in-video timestamps"
+                        >
+                          position not recorded
+                        </span>
+                      )}
+                    </div>
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      {evidence && (
+                        <span
+                          className="sc-badge border border-surface-600 bg-surface-800 text-slate-300"
+                          title="The tracked person this fall was attributed to (a temporary ID within this analysis)"
+                        >
+                          {personId === null || personId === undefined ? 'person not identified' : `person ID ${personId}`}
+                        </span>
+                      )}
+                      {detector && (
+                        <span
+                          title={detector.title}
+                          className="sc-badge border border-surface-600 bg-surface-800 text-slate-400"
+                        >
+                          {detector.label}
+                        </span>
+                      )}
+                      <span
+                        className="sc-badge border border-status-error/30 bg-status-error/10 text-status-error"
+                        title="How confident the detector was, not how severe the fall was"
                       >
-                        at {videoTime} in video
-                      </button>
+                        {confidencePercent}% confidence
+                      </span>
+                    </div>
+                    {poseNote && (
+                      <p
+                        className="mb-1 text-xs text-slate-300"
+                        title="Torso angle from vertical measured for this person - evidence for review, not a verdict. When the detector fires on someone still upright, the alert waits up to 2 s to see whether they go down, and says what it saw."
+                      >
+                        <span className="text-slate-500">Pose evidence: </span>
+                        <span>{poseNote}</span>
+                      </p>
+                    )}
+                    <p className="mb-2 text-xs text-slate-500">
+                      Analysed {formatDateTime(event.timestamp)}
+                    </p>
+                    {recording ? (
+                      <MediaVideo kind="recording" id={recording.id} />
                     ) : (
-                      <span
-                        className="sc-badge border border-surface-600 bg-surface-800 text-slate-500"
-                        title="This analysis predates in-video timestamps"
-                      >
-                        position not recorded
-                      </span>
+                      <p className="text-xs text-slate-500">No clip was saved for this event.</p>
                     )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
-                    {detector && (
-                      <span
-                        title={detector.title}
-                        className="sc-badge border border-surface-600 bg-surface-800 text-slate-400"
-                      >
-                        {detector.label}
-                      </span>
-                    )}
-                    <span
-                      className="sc-badge border border-status-error/30 bg-status-error/10 text-status-error"
-                      title="How confident the detector was, not how severe the fall was"
-                    >
-                      {confidencePercent}% confidence
-                    </span>
-                  </div>
-                </div>
-                <p className="mb-2 text-xs text-slate-500">
-                  Analysed {formatDateTime(event.timestamp)}
-                </p>
-                {recording ? (
-                  <MediaVideo kind="recording" id={recording.id} />
-                ) : (
-                  <p className="text-xs text-slate-500">No clip was saved for this event.</p>
-                )}
-              </div>
-            )
-          })}
-          {unpairedRecordings.map((rec) => (
-            <MediaVideo key={rec.id} kind="recording" id={rec.id} />
-          ))}
-        </div>
-      )}
+                  </article>
+                )
+              })}
+              {unpairedRecordings.map((rec) => (
+                <MediaVideo key={rec.id} kind="recording" id={rec.id} />
+              ))}
+            </div>
+          )}
+        </aside>
+      </div>
     </Modal>
   )
 }

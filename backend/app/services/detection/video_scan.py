@@ -93,7 +93,9 @@ def scan_video(
     and yields one ScannedFrame per decoded frame.
 
     `pipeline` is a detection/fall_pipeline.FallPipeline (or anything with
-    the same `update(frame, people, now)` signature). It carries
+    the same `update(frame, people, now, frame_index)` signature;
+    `frame_index` is the video's own frame number, so a tracker shared with
+    the clip annotator sees one consistent numbering). It carries
     per-subject tracking state, so one instance must drive exactly one
     video.
 
@@ -121,7 +123,7 @@ def scan_video(
         if frame_index % stride == 0:
             video_time_seconds = frame_index / properties.fps
             people = extract_people(frame) if extract_people is not None else ()
-            fall_events = pipeline.update(frame, people, now=video_time_seconds)
+            fall_events = pipeline.update(frame, people, now=video_time_seconds, frame_index=frame_index)
             yield ScannedFrame(
                 index=frame_index,
                 frame=frame,

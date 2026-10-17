@@ -39,11 +39,19 @@ from app.models.video_upload import (
     STATUS_PROCESSING,
     VideoUpload,
 )
-from app.services.cascade_delete import remove_upload_clip_dir, snapshot_path_for_clip, stage_delete_video_upload
+from app.core.video_codec import inspect_clip
+from app.services.cascade_delete import (
+    remove_upload_clip_dir,
+    snapshot_path_for_clip,
+    stage_delete_video_upload,
+    upload_clip_dir,
+    upload_tracking_path,
+)
 from app.services.detection.annotated_clip_renderer import iter_annotated_frames
 from app.services.detection.engine import detection_engine
 from app.services.detection.fall_annotation import FallClipAnnotator
-from app.services.detection.fall_pipeline import FallPipeline
+from app.services.detection.fall_pipeline import FallPipeline, build_scene_tracker
+from app.services.detection.tracking_record import TrackingRecorder
 from app.services.detection.video_scan import open_video, scan_video
 from app.services.notifications import notification_service
 from app.services.realtime import realtime_broadcaster
@@ -276,10 +284,20 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
         duration_seconds=properties.duration_seconds,
     )
 
-    fall_pipeline = FallPipeline()
+    # One tracker for the whole video, shared by the fall pipeline (which
+    # attributes events to people), the clip annotator (which draws them)
+    # and the tracking record (which the results overlay replays), so a
+    # person carries the same id in all three. Created per video, so no
+    # track state can leak from one upload into the next.
+    scene = None
+    if settings.PERSON_TRACKING_ENABLED:
+        scene = build_scene_tracker(history_length=FallClipAnnotator.history_length_for(
+            fps, settings.VIDEO_ANALYSIS_FRAME_STRIDE, PRE_EVENT_SECONDS, POST_EVENT_SECONDS,
+        ))
+    fall_pipeline = FallPipeline(scene=scene)
     logger.info(
-        "Video upload %s: analysing %d frames at %.2f fps, fall detection mode=%r",
-        video_upload_id, frame_count, fps, fall_pipeline.mode,
+        "Video upload %s: analysing %d frames at %.2f fps, fall detection mode=%r, tracking %s",
+        video_upload_id, frame_count, fps, fall_pipeline.mode, "on" if scene is not None else "off",
     )
     # Purely an annotation layer over the events the pipeline above
     # decided on: it tracks the people the pose model already found and
@@ -291,7 +309,10 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
         stride=settings.VIDEO_ANALYSIS_FRAME_STRIDE,
         pre_event_seconds=PRE_EVENT_SECONDS,
         post_event_seconds=POST_EVENT_SECONDS,
+        scene=scene,
     )
+    recorder: TrackingRecorder | None = None
+    extract_people = detection_engine.extract_people if detection_engine.should_run_pose(fall_pipeline) else None
     raw_buffer = deque(maxlen=int(PRE_EVENT_SECONDS * fps) or 1)
     # list of dicts: {"remaining", "frames", "first_index", "event", "annotation"}
     pending_clips = []
@@ -301,8 +322,48 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
     last_reported_percent = -1
     cancelled = False
     last_cancel_check = time.monotonic()
+    last_processed = None  # (frame index, video time) of the latest processed frame
 
-    for scanned in scan_video(cap, properties, fall_pipeline, detection_engine.extract_people):
+    def queue_fall_event(fall_event, frame_index, video_time_seconds):
+        # `frame_index` is where the event was RETURNED. An event held by
+        # pose verification fired earlier, and is placed in the footage
+        # where it fired: its timestamp, overlay highlight and annotation.
+        # The clip is cut from the current frame's buffer (frames before
+        # the fire point may already have left it) and keeps its full
+        # post-event length from the fire point, so it still spans it.
+        fired_index = fall_event.get("fired_frame_index", frame_index)
+        video_time_seconds = fall_event.get("fired_at", video_time_seconds)
+        already_elapsed = max(frame_index - fired_index, 0)
+        confidence = fall_event.get("confidence", 1.0)
+        fall_events.append({
+            "timestamp_seconds": round(video_time_seconds, 2),
+            "confidence": confidence,
+        })
+        pending_clips.append({
+            "remaining": max(int(POST_EVENT_SECONDS * fps) - already_elapsed, 1),
+            "frames": list(raw_buffer),
+            # Index of frames[0] on the video's own frame
+            # timeline. The buffer holds every decoded frame, so
+            # clip frame i is video frame first_index + i - which
+            # is what lets the annotation follow the subject
+            # rather than sit still for the whole clip.
+            "first_index": frame_index - len(raw_buffer) + 1,
+            "event": {
+                "timestamp_seconds": video_time_seconds,
+                "confidence": confidence,
+                "detector": fall_event.get("detector"),
+                # Present only when tracking is on: who the fall
+                # was attributed to, and the pose evidence for them.
+                "person_track_id": fall_event.get("person_track_id"),
+                "pose": fall_event.get("pose"),
+                "bbox": fall_event.get("bbox"),
+            },
+            "annotation": annotator.plan_for_event(
+                fall_event, fired_index, video_time_seconds,
+            ),
+        })
+
+    for scanned in scan_video(cap, properties, fall_pipeline, extract_people):
         now_wall = time.monotonic()
         if now_wall - last_cancel_check >= CANCEL_CHECK_INTERVAL_SECONDS:
             last_cancel_check = now_wall
@@ -325,6 +386,15 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
                 scanned.people,
                 fall_pipeline.last_fall_boxes,
             )
+            if scene is not None:
+                if recorder is None:
+                    frame_height, frame_width = frame.shape[:2]
+                    recorder = _new_recorder(frame_width, frame_height, fps)
+                recorder.add_frame(scanned.index, scanned.video_time_seconds, scene.current)
+                if fall_pipeline.last_suppressed_events:
+                    recorder.add_suppressed_events(
+                        scanned.video_time_seconds, fall_pipeline.last_suppressed_events,
+                    )
 
         # Advance any clips currently collecting post-event frames.
         still_pending = []
@@ -336,6 +406,7 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
                 if not _write_upload_clip(
                     video_upload_id, clip["frames"], fps, clip["event"],
                     annotation=clip["annotation"], first_frame_index=clip["first_index"],
+                    recorder=recorder,
                 ):
                     # The upload was deleted between the fall firing and
                     # this clip finishing its post-event buffer - the
@@ -350,32 +421,10 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
 
         if scanned.processed:
             max_concurrent_persons = max(max_concurrent_persons, len(scanned.people))
+            last_processed = (scanned.index, scanned.video_time_seconds)
 
             for fall_event in scanned.fall_events:
-                confidence = fall_event.get("confidence", 1.0)
-                detector = fall_event.get("detector")
-                fall_events.append({
-                    "timestamp_seconds": round(scanned.video_time_seconds, 2),
-                    "confidence": confidence,
-                })
-                pending_clips.append({
-                    "remaining": int(POST_EVENT_SECONDS * fps) or 1,
-                    "frames": list(raw_buffer),
-                    # Index of frames[0] on the video's own frame
-                    # timeline. The buffer holds every decoded frame, so
-                    # clip frame i is video frame first_index + i - which
-                    # is what lets the annotation follow the subject
-                    # rather than sit still for the whole clip.
-                    "first_index": scanned.index - len(raw_buffer) + 1,
-                    "event": {
-                        "timestamp_seconds": scanned.video_time_seconds,
-                        "confidence": confidence,
-                        "detector": detector,
-                    },
-                    "annotation": annotator.plan_for_event(
-                        fall_event, scanned.index, scanned.video_time_seconds,
-                    ),
-                })
+                queue_fall_event(fall_event, scanned.index, scanned.video_time_seconds)
 
         frame_index = scanned.index + 1
         if frame_count:
@@ -383,6 +432,15 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
             if percent != last_reported_percent:
                 last_reported_percent = percent
                 _set_status(video_upload_id, progress_percent=percent)
+
+    # The video ended: events pose verification is still holding are
+    # decided now (released when there is too little posture to judge),
+    # stamped at the last processed frame like any event firing there.
+    if not cancelled and last_processed is not None:
+        for fall_event in fall_pipeline.flush():
+            queue_fall_event(fall_event, *last_processed)
+        if recorder is not None and fall_pipeline.last_suppressed_events:
+            recorder.add_suppressed_events(last_processed[1], fall_pipeline.last_suppressed_events)
 
     # Flush any clips still collecting post-event frames when the video
     # ends - skipped once cancelled, since every one of them would just
@@ -393,10 +451,24 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
             if not _write_upload_clip(
                 video_upload_id, clip["frames"], fps, clip["event"],
                 annotation=clip["annotation"], first_frame_index=clip["first_index"],
+                recorder=recorder,
             ):
                 cancelled = True
 
     cap.release()
+
+    # Written before the deletion check below, so an upload deleted in the
+    # meantime has its record removed by the same cascade as its clips.
+    if recorder is not None and not cancelled:
+        try:
+            recorder.write(upload_tracking_path(video_upload_id), scene.summaries())
+        except Exception:
+            # The overlay is a review aid; failing to save it must not fail
+            # an analysis whose events and clips are already persisted.
+            logger.exception("Video upload %s: could not write the tracking record", video_upload_id)
+
+    if not cancelled:
+        _write_playable_preview(video_upload_id, stored_path, fps)
 
     # The authoritative check, regardless of how we got here: whether the
     # loop broke early, ran to completion, or was cancelled right on its
@@ -432,6 +504,67 @@ def _process(video_upload_id: int, stored_path: str, original_filename: str) -> 
     return True
 
 
+def _write_playable_preview(video_upload_id: int, stored_path: str, fps: float) -> None:
+    """Re-encodes the source video for the results player when its codec is
+    one no browser decodes (MPEG-4 Part 2 in an .mp4 is the common case -
+    it is what OpenCV and many cameras write). Without this the analysis
+    completes but the player beside its pose/tracking overlay stays blank.
+
+    Every frame is written at the source's frame rate and size, so the
+    tracking record's frame times and coordinates line up with the preview
+    exactly as they would with the original. Written under a temporary
+    name and moved into place, so the stream endpoint never serves a
+    half-encoded file. Best effort: on any failure the original is served
+    as before and the player reports that it cannot decode it."""
+    if not inspect_clip(stored_path).needs_transcode:
+        return
+
+    clip_dir = upload_clip_dir(video_upload_id)
+    clip_dir.mkdir(parents=True, exist_ok=True)
+    cap = cv2.VideoCapture(stored_path)
+    writer = None
+    written_path = None
+    try:
+        ok, frame = cap.read()
+        if not ok:
+            return
+        height, width = frame.shape[:2]
+        codec, writer, written_path = recording_engine_mod.open_writer(
+            str(clip_dir / "source_preview.partial"), width, height, fps,
+        )
+        if writer is None or codec == "mp4v":
+            # mp4v is the ladder's last resort and exactly the codec being
+            # replaced - a preview in it would play no better.
+            logger.warning(
+                "Video upload %s: source is not browser-playable and no playable encoder is available",
+                video_upload_id,
+            )
+            return
+        while ok:
+            writer.write(frame)
+            ok, frame = cap.read()
+        writer.release()
+        writer = None
+
+        final_path = clip_dir / f"source_preview{Path(written_path).suffix}"
+        if _deletion_requested(video_upload_id):
+            return
+        os.replace(written_path, final_path)
+        written_path = None
+        logger.info("Video upload %s: wrote browser-playable preview with %s", video_upload_id, codec)
+    except Exception:
+        logger.exception("Video upload %s: could not write a playable preview", video_upload_id)
+    finally:
+        cap.release()
+        if writer is not None:
+            writer.release()
+        if written_path and os.path.exists(written_path):
+            try:
+                os.remove(written_path)
+            except OSError:
+                pass
+
+
 def _clip_frames(frames: list, first_frame_index: int, annotation):
     """The frames to encode: annotated where there is a plan with boxes to
     draw, and the untouched originals otherwise.
@@ -459,6 +592,28 @@ def _annotation_summary(annotation) -> str:
     return f"track {annotation.track_id} ({len(annotation.observations)} obs)"
 
 
+def _new_recorder(frame_width: int, frame_height: int, fps: float) -> TrackingRecorder:
+    return TrackingRecorder(
+        frame_width=frame_width,
+        frame_height=frame_height,
+        fps=fps,
+        stride=settings.VIDEO_ANALYSIS_FRAME_STRIDE,
+        keypoint_min_confidence=settings.POSE_KEYPOINT_MIN_CONFIDENCE,
+        max_frames=settings.TRACKING_MAX_RECORDED_FRAMES,
+        settings_snapshot={
+            "pose_estimation_enabled": bool(settings.POSE_ESTIMATION_ENABLED),
+            "pose_model": settings.YOLO_POSE_MODEL,
+            "pose_inference_imgsz": int(settings.POSE_INFERENCE_IMGSZ),
+            "tracker": "PersonTracker (greedy IoU + centre distance)",
+            "tracking_max_age_seconds": float(settings.TRACKING_MAX_AGE_SECONDS),
+            "tracking_min_hits": int(settings.TRACKING_MIN_HITS),
+            "fall_pose_verification": bool(settings.FALL_POSE_VERIFICATION),
+            "fall_pose_confirm_seconds": float(settings.FALL_POSE_CONFIRM_SECONDS),
+            "fall_track_dedupe": bool(settings.FALL_TRACK_DEDUPE),
+        },
+    )
+
+
 def _write_upload_clip(
     video_upload_id: int,
     frames: list,
@@ -466,6 +621,7 @@ def _write_upload_clip(
     event: dict,
     annotation=None,
     first_frame_index: int = 0,
+    recorder: TrackingRecorder | None = None,
 ) -> bool:
     """Encodes one fall's pre/post-event buffer to disk and records it as
     a Recording + Event. Returns False, having written nothing to the
@@ -622,9 +778,14 @@ def _write_upload_clip(
                 "timestamp": event_timestamp,
                 "video_timestamp_seconds": round(event["timestamp_seconds"], 2),
                 "detector": event.get("detector"),
+                "person_track_id": event.get("person_track_id"),
             },
             owner_user_id=owner_user_id,
         )
+        if recorder is not None:
+            recorder.add_fall_event(
+                event["timestamp_seconds"], event, event_id=event_row.id, recording_id=recording.id,
+            )
 
     notification_service.notify_alert(
         event_type="fall",

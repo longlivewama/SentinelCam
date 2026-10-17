@@ -117,7 +117,10 @@ export default function Dashboard() {
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
             Falls over time ({summary.window_days}d)
           </h2>
-          <BarChart data={summary.falls.over_time.map((d) => ({ label: d.date.slice(5), value: d.count }))} />
+          <BarChart
+            data={summary.falls.over_time.map((d) => ({ label: d.date.slice(5), value: d.count }))}
+            emptyLabel="No falls detected in this window."
+          />
         </div>
         <div className="sc-card p-5">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">Falls by camera</h2>
@@ -201,12 +204,15 @@ export default function Dashboard() {
               return (
                 <div key={alert.id} className="flex items-center justify-between gap-3 py-3">
                   <div className="flex items-center gap-3">
-                    <span className={`text-lg ${meta.color}`} aria-hidden>
-                      {meta.icon}
+                    <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-surface-700 bg-surface-850">
+                      <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
                     </span>
                     <div>
                       <p className="text-sm font-medium text-slate-200">{meta.label}</p>
-                      <p className="text-xs text-slate-500">{formatDateTime(alert.timestamp)}</p>
+                      <p className="text-xs text-slate-500">
+                        {formatDateTime(alert.timestamp)} · {alert.video_upload_id ? 'uploaded video' : 'live camera'} ·{' '}
+                        {Math.round((alert.confidence_score ?? 0) * 100)}% confidence
+                      </p>
                     </div>
                   </div>
                   {alert.acknowledged ? (

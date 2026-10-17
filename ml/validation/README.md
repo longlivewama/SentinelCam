@@ -343,6 +343,15 @@ replays the cached boxes through a fresh gate. Bit-identical to a full re-run.
 The cache is keyed on video size + mtime **and the model's sha256**, so editing a clip or swapping
 the checkpoint invalidates it automatically.
 
+### Comparing pose / tracking assistance
+
+`python -m ml.validation.compare_fall_assist` answers a narrower question on the same corpus and
+matching rule: does pose estimation or multi-person tracking improve fall alerting? It runs the
+pose model and the fall detector once per clip, then replays the cached output through the
+production `FallPipeline` with each assist variant (tracking only, per-person dedupe, pose
+verification at several upright thresholds). It writes nothing to the repository; pass `--json`
+for machine-readable rows. Results and their caveats are in the root README.
+
 ### `--run-pose`
 
 Off by default. In `model` mode `FallPipeline` feeds pose output only to the heuristic, which isn't

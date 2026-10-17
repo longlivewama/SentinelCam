@@ -11,7 +11,7 @@ export default function RecordingRow({ recording, cameraName, onView, onDelete }
       </td>
       <td className="whitespace-nowrap px-4 py-3">
         <span className={`inline-flex items-center gap-1.5 text-sm ${meta.color}`}>
-          <span aria-hidden>{meta.icon}</span>
+          <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${meta.dot}`} />
           {meta.label}
         </span>
       </td>

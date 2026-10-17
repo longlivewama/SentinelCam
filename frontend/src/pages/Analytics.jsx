@@ -69,7 +69,10 @@ export default function Analytics() {
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
                 Falls over time
               </h2>
-              <BarChart data={summary.falls.over_time.map((d) => ({ label: d.date.slice(5), value: d.count }))} />
+              <BarChart
+                data={summary.falls.over_time.map((d) => ({ label: d.date.slice(5), value: d.count }))}
+                emptyLabel="No falls in this window."
+              />
             </div>
             <div className="sc-card p-5">
               <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">

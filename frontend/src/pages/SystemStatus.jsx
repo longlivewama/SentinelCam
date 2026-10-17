@@ -62,7 +62,7 @@ export default function SystemStatus() {
   const usingHeuristicFallback = activeMode === 'heuristic' && configuredMode !== 'heuristic'
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6">
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-100">System Status</h1>
         <p className="mt-1 text-sm text-slate-400">
@@ -71,91 +71,136 @@ export default function SystemStatus() {
         </p>
       </div>
 
-      <div className="sc-card mb-6 p-6">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Models</h2>
-        <StatusRow
-          label="Trained fall detector"
-          ok={fallDetector.loaded}
-          okLabel="Loaded"
-          badLabel="Not loaded"
-        />
-        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
-          <span className="text-sm text-slate-300">Fall detection running as</span>
-          <span className={`text-sm ${usingHeuristicFallback ? 'text-status-warn' : 'text-slate-400'}`}>
-            {activeMode === 'model'
-              ? 'Trained model'
-              : activeMode === 'hybrid'
-                ? 'Model + pose heuristic'
-                : 'Pose heuristic'}
-            {configuredMode === 'auto' && <span className="text-slate-500"> (auto)</span>}
-          </span>
-        </div>
-        {/* An "auto" deployment that silently fell back to the weaker
-            heuristic looks identical to a healthy one from the outside.
-            This is where an operator finds out - and why. */}
-        {usingHeuristicFallback && (
-          <div className="my-2 rounded-lg border border-status-warn/30 bg-status-warn/10 px-3 py-2 text-xs text-amber-300">
-            <p className="font-medium">Running on the pose heuristic, not the trained model.</p>
-            <p className="mt-1 text-amber-300/80">
-              {fallDetector.error || 'The trained detector is not configured.'} Fall detection still
-              works, but accuracy is lower than the documented model performance.
-            </p>
-          </div>
-        )}
-        {fallDetector.class_names && (
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <div className="sc-card p-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Models</h2>
+          <StatusRow
+            label="Trained fall detector"
+            ok={fallDetector.loaded}
+            okLabel="Loaded"
+            badLabel="Not loaded"
+          />
           <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
-            <span className="text-sm text-slate-300">Detector classes</span>
-            <span className="font-mono text-sm text-slate-400">
-              {Object.values(fallDetector.class_names).join(', ')}
+            <span className="text-sm text-slate-300">Fall detection running as</span>
+            <span className={`text-sm ${usingHeuristicFallback ? 'text-status-warn' : 'text-slate-400'}`}>
+              {activeMode === 'model'
+                ? 'Trained model'
+                : activeMode === 'hybrid'
+                  ? 'Model + pose heuristic'
+                  : 'Pose heuristic'}
+              {configuredMode === 'auto' && <span className="text-slate-500"> (auto)</span>}
             </span>
           </div>
+          {/* An "auto" deployment that silently fell back to the weaker
+              heuristic looks identical to a healthy one from the outside.
+              This is where an operator finds out - and why. */}
+          {usingHeuristicFallback && (
+            <div className="my-2 rounded-lg border border-status-warn/30 bg-status-warn/10 px-3 py-2 text-xs text-amber-300">
+              <p className="font-medium">Running on the pose heuristic, not the trained model.</p>
+              <p className="mt-1 text-amber-300/80">
+                {fallDetector.error || 'The trained detector is not configured.'} Fall detection still
+                works, but accuracy is lower than the documented model performance.
+              </p>
+            </div>
+          )}
+          {fallDetector.class_names && (
+            <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+              <span className="text-sm text-slate-300">Detector classes</span>
+              <span className="font-mono text-sm text-slate-400">
+                {Object.values(fallDetector.class_names).join(', ')}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+            <span className="text-sm text-slate-300">Detection confidence floor</span>
+            <span className="text-sm text-slate-400">{Math.round((fallDetector.min_confidence ?? 0) * 100)}%</span>
+          </div>
+          <StatusRow label="Pose + object models loaded" ok={status.models.pose_object_models_loaded} badLabel="Not loaded yet" />
+          <StatusRow label="Fall classifier (corroborating signal)" ok={status.models.fall_classifier_loaded} />
+          <StatusRow label="Violence detection model" ok={status.models.violence_model_configured} okLabel="Trained model" badLabel="Heuristic only" />
+        </div>
+
+        <div className="sc-card p-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Detection</h2>
+          <StatusRow
+            label="Active camera detection loops"
+            ok={status.detection.active_camera_detection_loops > 0}
+            okLabel={`${status.detection.active_camera_detection_loops} running`}
+            badLabel="None running"
+          />
+          <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+            <span className="text-sm text-slate-300">Live detection frame stride</span>
+            <span className="text-sm text-slate-400">every {status.detection.detection_frame_stride} frames</span>
+          </div>
+          <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+            <span className="text-sm text-slate-300">Video analysis frame stride</span>
+            <span className="text-sm text-slate-400">every {status.detection.video_analysis_frame_stride} frames</span>
+          </div>
+          <div className="flex items-center justify-between py-2.5">
+            <span className="text-sm text-slate-300">Concurrent video analyses</span>
+            <span className="text-sm text-slate-400">up to {status.detection.max_concurrent_video_analyses}</span>
+          </div>
+        </div>
+
+        {status.pose_and_tracking && (
+          <div className="sc-card p-6" data-testid="pose-tracking-status">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Pose &amp; tracking</h2>
+            <StatusRow
+              label="Pose estimation"
+              ok={status.pose_and_tracking.pose_estimation_enabled}
+              okLabel="Enabled"
+              badLabel="Disabled"
+            />
+            <StatusRow
+              label={`Pose model (${status.pose_and_tracking.pose_model})`}
+              ok={status.pose_and_tracking.pose_model_loaded}
+              okLabel="Loaded"
+              badLabel={status.pose_and_tracking.pose_model_error ? 'Failed to load' : 'Not loaded yet'}
+            />
+            {status.pose_and_tracking.pose_model_error && (
+              <p className="py-2 text-xs text-red-300">{status.pose_and_tracking.pose_model_error}</p>
+            )}
+            <StatusRow
+              label="Multi-person tracking"
+              ok={status.pose_and_tracking.person_tracking_enabled}
+              okLabel="Enabled"
+              badLabel="Disabled"
+            />
+            <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+              <span className="text-sm text-slate-300">Track ends after</span>
+              <span className="text-sm text-slate-400">{status.pose_and_tracking.tracking_max_age_seconds}s unseen</span>
+            </div>
+            <StatusRow
+              label="Pose verification of fall events"
+              ok={status.pose_and_tracking.fall_pose_verification}
+              okLabel="On"
+              badLabel="Off"
+            />
+            <StatusRow
+              label="Per-person fall dedupe"
+              ok={status.pose_and_tracking.fall_track_dedupe}
+              okLabel="On"
+              badLabel="Off"
+            />
+          </div>
         )}
-        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
-          <span className="text-sm text-slate-300">Detection confidence floor</span>
-          <span className="text-sm text-slate-400">{Math.round((fallDetector.min_confidence ?? 0) * 100)}%</span>
-        </div>
-        <StatusRow label="Pose + object models loaded" ok={status.models.pose_object_models_loaded} badLabel="Not loaded yet" />
-        <StatusRow label="Fall classifier (corroborating signal)" ok={status.models.fall_classifier_loaded} />
-        <StatusRow label="Violence detection model" ok={status.models.violence_model_configured} okLabel="Trained model" badLabel="Heuristic only" />
-      </div>
 
-      <div className="sc-card mb-6 p-6">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Detection</h2>
-        <StatusRow
-          label="Active camera detection loops"
-          ok={status.detection.active_camera_detection_loops > 0}
-          okLabel={`${status.detection.active_camera_detection_loops} running`}
-          badLabel="None running"
-        />
-        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
-          <span className="text-sm text-slate-300">Live detection frame stride</span>
-          <span className="text-sm text-slate-400">every {status.detection.detection_frame_stride} frames</span>
+        <div className="sc-card p-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Notifications</h2>
+          <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
+            <span className="text-sm text-slate-300">Enabled channels</span>
+            <span className="text-sm text-slate-400">
+              {status.notifications.channels_enabled.length > 0 ? status.notifications.channels_enabled.join(', ') : 'None'}
+            </span>
+          </div>
+          <StatusRow label="Alert recipients configured" ok={status.notifications.alert_recipients_configured} />
         </div>
-        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
-          <span className="text-sm text-slate-300">Video analysis frame stride</span>
-          <span className="text-sm text-slate-400">every {status.detection.video_analysis_frame_stride} frames</span>
-        </div>
-        <div className="flex items-center justify-between py-2.5">
-          <span className="text-sm text-slate-300">Concurrent video analyses</span>
-          <span className="text-sm text-slate-400">up to {status.detection.max_concurrent_video_analyses}</span>
-        </div>
-      </div>
 
-      <div className="sc-card mb-6 p-6">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Notifications</h2>
-        <div className="flex items-center justify-between border-b border-surface-800 py-2.5">
-          <span className="text-sm text-slate-300">Enabled channels</span>
-          <span className="text-sm text-slate-400">
-            {status.notifications.channels_enabled.length > 0 ? status.notifications.channels_enabled.join(', ') : 'None'}
-          </span>
+        <div className="sc-card p-6">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Storage</h2>
+          <StatusRow label="Recordings directory writable" ok={status.storage.recordings_dir_writable} />
+          <StatusRow label="Uploads directory writable" ok={status.storage.uploads_dir_writable} />
         </div>
-        <StatusRow label="Alert recipients configured" ok={status.notifications.alert_recipients_configured} />
-      </div>
-
-      <div className="sc-card p-6">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400">Storage</h2>
-        <StatusRow label="Recordings directory writable" ok={status.storage.recordings_dir_writable} />
-        <StatusRow label="Uploads directory writable" ok={status.storage.uploads_dir_writable} />
       </div>
     </div>
   )

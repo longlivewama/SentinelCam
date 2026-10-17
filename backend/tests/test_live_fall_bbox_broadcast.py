@@ -10,16 +10,22 @@ and the module-level `recording_engine`/`realtime_broadcaster` (also
 stubbed), so this is a pure unit test of the wiring between a fall event
 and what gets published.
 """
+from types import SimpleNamespace
+
 import numpy as np
 
 from app.services.detection.engine import DetectionEngine
 
 
 class FakeFallPipeline:
+    # Mirrors FallPipeline's interface: no tracker, pose not required.
+    scene = None
+    needs_pose = False
+
     def __init__(self, events):
         self._events = events
 
-    def update(self, frame, people):
+    def update(self, frame, people, now=None, frame_index=None):
         return self._events
 
 
@@ -88,3 +94,33 @@ def test_no_bbox_is_invented_when_the_event_carries_none(monkeypatch):
 def test_no_broadcast_at_all_when_no_fall_fires(monkeypatch):
     published = _run(monkeypatch, [])
     assert published == []
+
+
+def test_a_held_event_is_drawn_on_its_persons_current_box(monkeypatch):
+    """Released up to 2 s after it fired, a held event's fire-time box would
+    hang where the person used to be on the live view. While its attributed
+    person is still tracked, their current box is drawn instead; anything
+    else keeps the event's own box."""
+    engine = DetectionEngine()
+    published = []
+    monkeypatch.setattr(
+        "app.services.detection.engine.realtime_broadcaster.publish",
+        lambda event_type, data, owner_user_id=None: published.append(data),
+    )
+    scene = SimpleNamespace(current=[
+        SimpleNamespace(track_id=4, bbox=(300.0, 200.0, 420.0, 470.0), state="confirmed"),
+    ])
+    frame = np.zeros((480, 640, 3), dtype="uint8")
+    fired_box = (100.0, 50.0, 200.0, 210.0)
+
+    held = {"bbox": fired_box, "person_track_id": 4, "fired_at": 10.0, "confidence": 0.7}
+    engine._broadcast_fall_bbox(1, frame, held, scene)
+    assert published[-1]["bbox"] == [300.0, 200.0, 420.0, 470.0]
+
+    immediate = {"bbox": fired_box, "person_track_id": 4, "confidence": 0.7}
+    engine._broadcast_fall_bbox(1, frame, immediate, scene)
+    assert published[-1]["bbox"] == list(fired_box)
+
+    held_person_gone = dict(held, person_track_id=9)
+    engine._broadcast_fall_bbox(1, frame, held_person_gone, scene)
+    assert published[-1]["bbox"] == list(fired_box)

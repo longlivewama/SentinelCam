@@ -38,6 +38,38 @@ def snapshot_path_for_clip(
     return Path(settings.SNAPSHOTS_DIR) / f"{prefix}_{Path(clip_filename).stem}.jpg"
 
 
+def upload_clip_dir(upload_id: int) -> Path:
+    """`recordings/uploads/{id}/` - the per-upload directory holding its
+    fall clips and its tracking record."""
+    return Path(settings.RECORDINGS_DIR) / "uploads" / str(upload_id)
+
+
+def upload_tracking_path(upload_id: int) -> Path:
+    """The per-video tracking record (see detection/tracking_record.py).
+    Frame-level pose and track data for one upload, kept beside its clips
+    and deleted with them."""
+    return upload_clip_dir(upload_id) / "tracking.json"
+
+
+# Containers recording_engine.open_writer can produce for a browser-playable
+# codec - the preview's extension depends on which encoder the build has.
+_PREVIEW_EXTENSIONS = (".mp4", ".webm")
+
+
+def upload_preview_paths(upload_id: int) -> List[Path]:
+    """Every path a browser-playable re-encode of the source video may sit
+    at (see video_analysis._write_playable_preview). Only written when the
+    uploaded file's codec is one no browser decodes, e.g. MPEG-4 Part 2."""
+    return [upload_clip_dir(upload_id) / f"source_preview{ext}" for ext in _PREVIEW_EXTENSIONS]
+
+
+def find_upload_preview(upload_id: int) -> Optional[Path]:
+    for path in upload_preview_paths(upload_id):
+        if path.is_file():
+            return path
+    return None
+
+
 def recording_snapshot_path(recording: Recording) -> str:
     return str(snapshot_path_for_clip(
         recording.filename, camera_id=recording.camera_id, video_upload_id=recording.video_upload_id,
@@ -49,8 +81,9 @@ def stage_delete_video_upload(db: Session, upload: VideoUpload) -> List[str]:
     (its Events and Recordings - which have no independent meaning
     without the source upload) within the given session, WITHOUT
     committing. Returns the on-disk file paths (recording clips, their
-    snapshots, and the source video itself) the caller should remove
-    after a successful commit."""
+    snapshots, the tracking record, any playable preview, and the source
+    video itself) the
+    caller should remove after a successful commit."""
     recordings = db.query(Recording).filter(Recording.video_upload_id == upload.id).all()
     paths = []
     for recording in recordings:
@@ -60,6 +93,8 @@ def stage_delete_video_upload(db: Session, upload: VideoUpload) -> List[str]:
     db.query(Event).filter(Event.video_upload_id == upload.id).delete()
     db.query(Recording).filter(Recording.video_upload_id == upload.id).delete()
 
+    paths.append(str(upload_tracking_path(upload.id)))
+    paths.extend(str(path) for path in upload_preview_paths(upload.id))
     paths.append(upload.stored_path)
     db.delete(upload)
     return paths
@@ -96,7 +131,7 @@ def remove_upload_clip_dir(upload_id: int) -> None:
     is still in there the directory stays, and whatever it is survives to
     be noticed. A failure here is not worth failing a delete over, so it
     is logged and swallowed."""
-    clip_dir = os.path.join(settings.RECORDINGS_DIR, "uploads", str(upload_id))
+    clip_dir = str(upload_clip_dir(upload_id))
     try:
         os.rmdir(clip_dir)
     except FileNotFoundError:

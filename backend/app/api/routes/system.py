@@ -33,6 +33,20 @@ def get_system_status(_operator: User = Depends(require_operator)):
             # that shows up.
             "fall_detector": fall_object_detector.model_info,
         },
+        "pose_and_tracking": {
+            "pose_estimation_enabled": settings.POSE_ESTIMATION_ENABLED,
+            "pose_model": settings.YOLO_POSE_MODEL,
+            "pose_model_loaded": detection_engine.pose_available,
+            "pose_model_error": detection_engine.pose_model_error,
+            "pose_inference_imgsz": settings.POSE_INFERENCE_IMGSZ,
+            "keypoint_min_confidence": settings.POSE_KEYPOINT_MIN_CONFIDENCE,
+            "person_tracking_enabled": settings.PERSON_TRACKING_ENABLED,
+            "tracker": "PersonTracker (greedy IoU + centre distance)",
+            "tracking_max_age_seconds": settings.TRACKING_MAX_AGE_SECONDS,
+            "tracking_min_hits": settings.TRACKING_MIN_HITS,
+            "fall_pose_verification": settings.FALL_POSE_VERIFICATION,
+            "fall_track_dedupe": settings.FALL_TRACK_DEDUPE,
+        },
         "detection": {
             "active_camera_detection_loops": detection_engine.active_camera_count,
             "detection_frame_stride": settings.DETECTION_FRAME_STRIDE,
