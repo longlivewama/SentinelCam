@@ -39,12 +39,30 @@ test.describe('Video upload and analysis', () => {
 
     await row.getByRole('button', { name: 'View' }).click()
     await expect(page.getByText('Persons detected')).toBeVisible()
-    // The fixture is MPEG-4 Part 2 ("FMP4"), which Chromium cannot decode,
-    // so the source player must say so rather than sit there blank. This
-    // used to assert a bare <video> was visible - which only held because
-    // MediaVideo's retry re-minted a byte-identical token and never
-    // surfaced the failure (see MediaVideo.jsx).
-    await expect(page.getByText('This video could not be played.')).toBeVisible()
+    // The fixture is MPEG-4 Part 2 ("FMP4"), which no browser can decode.
+    // Analysis writes a browser-playable preview for exactly this case and
+    // the source endpoint serves it, so the player must genuinely decode a
+    // frame - not merely mount, and not show "could not be played".
+    const video = page.getByRole('dialog').locator('video').first()
+    await expect(video).toBeVisible()
+    const playback = await video.evaluate(
+      (el) =>
+        new Promise((resolve) => {
+          const report = () => resolve({
+            readyState: el.readyState,
+            width: el.videoWidth,
+            error: el.error ? el.error.message : null,
+          })
+          if (el.readyState >= 2 || el.error) return report()
+          const timer = setTimeout(report, 15000)
+          el.onloadeddata = () => { clearTimeout(timer); report() }
+          el.onerror = () => { clearTimeout(timer); report() }
+        }),
+    )
+    expect(playback.error, `the browser refused the source video: ${playback.error}`).toBeNull()
+    expect(playback.readyState).toBeGreaterThanOrEqual(2)
+    expect(playback.width).toBeGreaterThan(0)
+    await expect(page.getByText('This video could not be played.')).toHaveCount(0)
     await expect(page.getByText('No fall events detected.')).toBeVisible()
   })
 

@@ -6,6 +6,7 @@ video_analysis.py opens the file it is already on disk, so extension,
 size, container-format and per-user quota checks all have to happen on
 the way in.
 """
+import json
 import logging
 import os
 import uuid
@@ -22,10 +23,16 @@ from app.core.ranges import serve_file_range
 from app.core.video_signature import looks_like_supported_video
 from app.database import get_db
 from app.models.user import User
-from app.models.video_upload import STATUS_PENDING, STATUS_PROCESSING, VideoUpload
+from app.models.video_upload import STATUS_COMPLETED, STATUS_PENDING, STATUS_PROCESSING, VideoUpload
 from app.schemas.media import MediaTokenOut
+from app.schemas.tracking import UploadTrackingOut
 from app.schemas.video_upload import VideoUploadOut
-from app.services.cascade_delete import remove_upload_clip_dir, stage_delete_video_upload
+from app.services.cascade_delete import (
+    find_upload_preview,
+    remove_upload_clip_dir,
+    stage_delete_video_upload,
+    upload_tracking_path,
+)
 from app.services.video_analysis import analyze_video_upload
 
 logger = logging.getLogger(__name__)
@@ -233,6 +240,34 @@ def create_upload_media_token(
     return issue_media_token(current_user, MEDIA_KIND_UPLOAD, upload.id)
 
 
+@router.get("/{upload_id}/tracking", response_model=UploadTrackingOut)
+def get_video_upload_tracking(
+    upload_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Pose estimation + multi-person tracking results for one analysed
+    upload: every processed frame's tracked people (box, keypoints, track
+    id), each track's lifetime, and which tracked person each fall event
+    was attributed to. Same 404/ownership rules as the upload itself - this
+    is derived from the uploader's footage.
+
+    404 when there is nothing to show: analysis not finished, analysed
+    before this feature existed, or analysed with tracking disabled."""
+    upload = _get_upload_or_404(upload_id, db)
+    _ensure_can_view(upload, current_user)
+
+    path = upload_tracking_path(upload.id)
+    if upload.status != STATUS_COMPLETED or not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No tracking data for this upload")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        logger.exception("Tracking record for upload %s is unreadable", upload.id)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No tracking data for this upload")
+
+
 @router.get("/{upload_id}/video")
 def stream_video_upload(
     upload_id: int,
@@ -243,6 +278,12 @@ def stream_video_upload(
     upload = _get_upload_or_404(upload_id, db)
     _ensure_can_view(upload, current_user)
 
+    # Analysis writes a browser-playable re-encode beside the clips when
+    # the original's codec cannot be decoded by a browser; same frames,
+    # same timing, so the tracking overlay applies to it unchanged.
+    preview = find_upload_preview(upload.id)
+    if preview is not None:
+        return serve_file_range(str(preview), request)
     return serve_file_range(_resolved_upload_path(upload), request)
 
 

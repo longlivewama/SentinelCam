@@ -188,6 +188,70 @@ class Settings(BaseSettings):
     # own. See fall_detection.py's gates for how the two combine.
     FALL_DETECTOR_MIN_CONSECUTIVE_FRAMES: int = 3
 
+    # --- Pose estimation + multi-person tracking ---
+    # The pose model (YOLO_POSE_MODEL) is also the person detector: one
+    # forward pass yields every person's box AND 17 COCO keypoints, and the
+    # tracker consumes those boxes, so tracking adds no inference. See
+    # services/detection/{pose,scene_tracking}.py.
+    #
+    # When False, uploaded-video analysis skips the pose model where nothing
+    # requires it - the trained-detector ("model") fall mode - which also
+    # means no person boxes for those uploads: no tracking, no overlays and
+    # a persons-detected count of 0. The heuristic and hybrid fall modes
+    # need keypoints and run it regardless, and so do live cameras, whose
+    # violence detection works from keypoints.
+    POSE_ESTIMATION_ENABLED: bool = True
+    # Inference size for the pose model. 640 is Ultralytics' default and
+    # what the system was measured at; lower is faster and less accurate on
+    # small, distant people.
+    POSE_INFERENCE_IMGSZ: int = 640
+    # Below this a keypoint counts as not visible: it is not drawn, and it
+    # is not used for posture evidence.
+    POSE_KEYPOINT_MIN_CONFIDENCE: float = 0.3
+
+    # Persistent per-source track ids, a live overlay feed, and the
+    # per-video tracking record behind the uploaded-video overlay.
+    PERSON_TRACKING_ENABLED: bool = True
+    # How long a person may go undetected before their track ends and a
+    # later detection gets a new id.
+    TRACKING_MAX_AGE_SECONDS: float = 1.5
+    # Processed frames a track needs before it is "confirmed" (shown solid,
+    # eligible as the person a fall belongs to). 1 confirms immediately.
+    TRACKING_MIN_HITS: int = 2
+    # Ceiling on processed frames written to an uploaded video's tracking
+    # record (~1h at the default stride). Past it the record is marked
+    # truncated; analysis itself is unaffected.
+    TRACKING_MAX_RECORDED_FRAMES: int = 20000
+
+    # --- Pose/tracking assistance for fall events ---
+    # Neither replaces the trained detector or its sustain gate; both act
+    # only on events that gate has ALREADY confirmed, and only when the
+    # event could be attributed to a tracked person. Evaluated against the
+    # labelled URFD corpus before choosing these defaults - see README.
+    #
+    # Hold an event whose attributed person was measured upright over the
+    # sustain window, and withhold it only if they are STILL measured
+    # upright FALL_POSE_CONFIRM_SECONDS later. No pose evidence, or the
+    # person's track ending, => the event stands. On by default since the
+    # deferred check was evaluated (README, "Pose and tracking in fall
+    # detection"): fewer false alerts and no lost falls on that corpus.
+    FALL_POSE_VERIFICATION: bool = True
+    # Median torso angle from vertical (degrees) below which a person
+    # counts as upright for the veto above.
+    FALL_POSE_UPRIGHT_MAX_DEGREES: float = 30.0
+    # With FALL_POSE_VERIFICATION on: how long an event whose person was
+    # upright at fire time is held while their posture after the event is
+    # watched. Released early once they are measured non-upright; withheld
+    # only if still measured upright when this runs out. 0 restores the
+    # immediate veto, which on the URFD corpus vetoed genuine falls caught
+    # while the person was still mid-fall.
+    FALL_POSE_CONFIRM_SECONDS: float = 2.0
+    # Suppress a second event for the same tracked person within this many
+    # seconds - the detector's own debounce is per fall-box track, which an
+    # id switch inside the detector can defeat.
+    FALL_TRACK_DEDUPE: bool = False
+    FALL_TRACK_DEDUPE_SECONDS: float = 10.0
+
     # Upper bound on video-upload analyses running at once. Each one
     # decodes a video and runs inference on a background thread, so
     # unbounded concurrency is a straightforward way to exhaust CPU and

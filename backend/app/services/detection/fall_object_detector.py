@@ -49,6 +49,9 @@ class FallObjectDetector:
         self._model = None
         self._load_attempted = False
         self._lock = threading.Lock()
+        # Serializes predict() on the one shared model - see the matching
+        # locks in detection/engine.py for why.
+        self._inference_lock = threading.Lock()
         self._model_path: Optional[str] = None
         self._class_names: Optional[dict] = None
         self._load_error: Optional[str] = None
@@ -142,12 +145,13 @@ class FallObjectDetector:
             return []
 
         try:
-            results = self._model.predict(
-                frame,
-                device=settings.MODEL_DEVICE,
-                conf=settings.FALL_DETECTOR_MIN_CONFIDENCE,
-                verbose=False,
-            )
+            with self._inference_lock:
+                results = self._model.predict(
+                    frame,
+                    device=settings.MODEL_DEVICE,
+                    conf=settings.FALL_DETECTOR_MIN_CONFIDENCE,
+                    verbose=False,
+                )
         except Exception:
             logger.exception("Trained fall detector inference failed; treating frame as no-detection")
             return []

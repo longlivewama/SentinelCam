@@ -50,6 +50,7 @@ def trigger_event(
     trigger_action: str,
     confidence_score: float = 1.0,
     detector: str = "heuristic",
+    person_track_id=None,
 ):
     """Fire-and-forget entry point called by detection/engine.py. Spawns a
     worker thread so the detection loop isn't blocked collecting
@@ -61,14 +62,16 @@ def trigger_event(
     confidence differently, so a score is not interpretable without it."""
     thread = threading.Thread(
         target=_handle_event,
-        args=(camera_id, trigger_action, confidence_score, detector),
+        args=(camera_id, trigger_action, confidence_score, detector, person_track_id),
         daemon=True,
         name=f"recording-{camera_id}-{trigger_action}",
     )
     thread.start()
 
 
-def _handle_event(camera_id: int, trigger_action: str, confidence_score: float, detector: str = "heuristic"):
+def _handle_event(
+    camera_id: int, trigger_action: str, confidence_score: float, detector: str = "heuristic", person_track_id=None,
+):
     event_timestamp = datetime.now(timezone.utc)
     stream = stream_manager.get(camera_id)
     if stream is None:
@@ -95,7 +98,10 @@ def _handle_event(camera_id: int, trigger_action: str, confidence_score: float, 
         return
 
     try:
-        _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector)
+        _write_recording(
+            camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector,
+            person_track_id=person_track_id,
+        )
     except Exception:
         logger.exception("Failed to persist recording for camera %s event %s", camera_id, trigger_action)
 
@@ -184,7 +190,10 @@ def open_writer(path: str, width: int, height: int, fps: int):
     return None, None, None
 
 
-def _write_recording(camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector="heuristic"):
+def _write_recording(
+    camera_id, trigger_action, confidence_score, event_timestamp, all_frames, pre_frames, detector="heuristic",
+    person_track_id=None,
+):
     height, width = all_frames[0].shape[:2]
     fps = max(settings.STREAM_FPS, 1)
 
@@ -267,6 +276,10 @@ def _write_recording(camera_id, trigger_action, confidence_score, event_timestam
                 "confidence_score": confidence_score,
                 "timestamp": event_timestamp,
                 "detector": detector,
+                # The live session's temporary id for the person the fall
+                # was attributed to (None when nobody could be named). Not
+                # persisted: it means nothing outside this camera session.
+                "person_track_id": person_track_id,
             },
         )
 

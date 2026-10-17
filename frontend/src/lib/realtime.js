@@ -2,7 +2,9 @@ import { create } from 'zustand'
 import { API_URL } from '../api/client'
 import { useAuthStore } from '../store/authStore'
 
-export const useRealtimeStatus = create(() => ({ connected: false }))
+// `hasConnected` separates "not connected yet" from "connection lost", so a
+// fresh page load says Connecting rather than Reconnecting.
+export const useRealtimeStatus = create(() => ({ connected: false, hasConnected: false }))
 
 let socket = null
 let intentionalClose = false
@@ -54,7 +56,7 @@ export function connectRealtime() {
 
   socket.onopen = () => {
     reconnectAttempt = 0
-    useRealtimeStatus.setState({ connected: true })
+    useRealtimeStatus.setState({ connected: true, hasConnected: true })
   }
 
   socket.onmessage = (event) => {
@@ -100,5 +102,5 @@ export function disconnectRealtime() {
   clearTimeout(reconnectTimer)
   socket?.close()
   socket = null
-  useRealtimeStatus.setState({ connected: false })
+  useRealtimeStatus.setState({ connected: false, hasConnected: false })
 }

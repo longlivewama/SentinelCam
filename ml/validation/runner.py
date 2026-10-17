@@ -194,7 +194,7 @@ class _NullPipeline:
         self._min_confidence = min_confidence
         self.frames: List[RawFrameDetections] = []
 
-    def update(self, frame, people, now=None):
+    def update(self, frame, people, now=None, frame_index=None):
         boxes = [
             {"bbox": [float(v) for v in d.bbox], "confidence": float(d.confidence)}
             for d in self._detector.detect(frame)

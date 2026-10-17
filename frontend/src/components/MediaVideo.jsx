@@ -26,6 +26,7 @@ export default function MediaVideo({
   videoRef,
   className = 'w-full rounded-lg bg-black',
   autoPlay = false,
+  overlay = null,
 }) {
   const { token, error: tokenError, refresh } = useMediaToken(kind, id)
   const [failed, setFailed] = useState(false)
@@ -69,17 +70,31 @@ export default function MediaVideo({
     return <div className={`${className} flex items-center justify-center text-sm text-slate-500`}>Loading video…</div>
   }
 
-  return (
+  const player = (
     <video
       ref={videoRef}
       controls
       autoPlay={autoPlay}
       preload="metadata"
-      className={className}
+      className={overlay ? `${className} block` : className}
       src={buildMediaUrl(kind, id, action, token)}
       onError={handleError}
     >
       Your browser does not support the video tag.
     </video>
+  )
+
+  if (!overlay) return player
+
+  // The overlay covers exactly the <video> element's box; a <video>
+  // letterboxes its picture inside that box like object-fit: contain, which
+  // is the projection PoseOverlay reproduces with its SVG viewBox. `block`
+  // removes the inline baseline gap that would otherwise let the overlay
+  // hang a few pixels below the picture.
+  return (
+    <div className="relative">
+      {player}
+      {overlay}
+    </div>
   )
 }

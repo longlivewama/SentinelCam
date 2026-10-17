@@ -5,10 +5,14 @@ import { useAuthStore } from '../store/authStore'
 import CameraForm from '../components/CameraForm'
 import CameraStream from '../components/CameraStream'
 import FallBoundingBoxOverlay from '../components/FallBoundingBoxOverlay'
+import OverlayControls from '../components/OverlayControls'
+import PoseOverlay from '../components/PoseOverlay'
 import MediaDownloadLink from '../components/MediaDownloadLink'
 import Modal from '../components/Modal'
 import VideoModal from '../components/VideoModal'
 import { onRealtimeEvent } from '../lib/realtime'
+import { useLiveTracks } from '../lib/liveTracks'
+import { useOverlayOptions } from '../lib/poseOverlay'
 import { formatDateTime, formatDuration, formatBytes, eventTypeMeta } from '../lib/format'
 
 // How long a live fall box stays drawn on screen after it fires. The
@@ -79,6 +83,14 @@ export default function CameraDetail() {
   const [viewingRecording, setViewingRecording] = useState(null)
   const [fallAlert, setFallAlert] = useState(null)
   const [togglingField, setTogglingField] = useState(null)
+  const [overlayOptions, toggleOverlayOption] = useOverlayOptions()
+  // Live pose + tracking: published by this camera's detection loop, so it
+  // exists only while the camera is on AND AI detection is enabled.
+  const liveTrackingAvailable = Boolean(camera?.is_active && camera?.ai_detection_enabled)
+  const liveScene = useLiveTracks(id, liveTrackingAvailable)
+  // People observed on the latest processed frame; `lost` tracks are only
+  // being held open for a moment and are neither drawn nor counted.
+  const inView = (liveScene?.persons || []).filter((p) => p.state !== 'lost')
   const fallAlertTimeout = useRef(null)
 
   const fetchData = async () => {
@@ -193,6 +205,22 @@ export default function CameraDetail() {
                 <span className="h-1.5 w-1.5 rounded-full bg-red-500 animate-pulse" />
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">Live</span>
               </div>
+              {liveScene && (
+                <PoseOverlay
+                  persons={liveScene.persons}
+                  frameWidth={liveScene.frame_width}
+                  frameHeight={liveScene.frame_height}
+                  skeleton={liveScene.pose_format?.skeleton}
+                  keypointNames={liveScene.pose_format?.keypoint_names}
+                  keypointMinConfidence={liveScene.keypoint_min_confidence}
+                  options={overlayOptions}
+                  highlightTrackIds={
+                    fallAlert?.person_track_id !== null && fallAlert?.person_track_id !== undefined
+                      ? [fallAlert.person_track_id]
+                      : []
+                  }
+                />
+              )}
               {fallAlert && (
                 <FallBoundingBoxOverlay
                   bbox={fallAlert.bbox}
@@ -213,6 +241,26 @@ export default function CameraDetail() {
             </div>
           )}
         </div>
+        {camera.is_active && (
+          <div className="flex flex-col gap-2 border-t border-surface-800 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <OverlayControls
+              options={overlayOptions}
+              onToggle={toggleOverlayOption}
+              disabled={!liveTrackingAvailable}
+            />
+            <p className="text-xs text-slate-400" aria-live="polite" data-testid="live-tracking-status">
+              {!liveTrackingAvailable
+                ? 'Pose and tracking overlays need AI detection turned on for this camera.'
+                : !liveScene
+                  ? 'Waiting for detection results…'
+                  : inView.length === 0
+                    ? 'Tracking: nobody in view'
+                    : `Tracking ${inView.length} in view · IDs ${inView
+                        .map((p) => `${p.track_id} (${Math.round(p.duration_seconds)}s)`)
+                        .join(', ')}`}
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="sc-card mb-6 p-6">
@@ -278,10 +326,6 @@ export default function CameraDetail() {
             <dd className="text-sm text-slate-200">{camera.crowd_threshold}</dd>
           </div>
           <div>
-            <dt className="sc-label">Abandoned Object (sec)</dt>
-            <dd className="text-sm text-slate-200">{camera.abandoned_object_seconds}</dd>
-          </div>
-          <div>
             <dt className="sc-label">Added</dt>
             <dd className="text-sm text-slate-200">{formatDateTime(camera.created_at)}</dd>
           </div>
@@ -299,8 +343,8 @@ export default function CameraDetail() {
               return (
                 <div key={rec.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div className="flex items-center gap-3">
-                    <span className={`text-lg ${meta.color}`} aria-hidden>
-                      {meta.icon}
+                    <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-surface-700 bg-surface-850">
+                      <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
                     </span>
                     <div>
                       <p className="text-sm font-medium text-slate-200">{meta.label}</p>

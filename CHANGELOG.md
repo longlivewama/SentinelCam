@@ -23,6 +23,27 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Human pose estimation and multi-person tracking.** The YOLOv8n-pose pass that already ran on
+  every processed frame now also feeds a per-session tracker (`SceneTracker`, wrapping the existing
+  `PersonTracker`): persistent track IDs with tentative/confirmed/lost states, 17 COCO keypoints per
+  person, and per-track lifetimes - no extra inference. Live cameras publish each processed frame
+  as a `tracks.update` WebSocket message; uploaded videos get a `tracking.json` record beside their
+  clips, served by `GET /api/video-uploads/{id}/tracking` and deleted with the upload. Fall events
+  are attributed to the tracked person they belong to (`person_track_id`) with pose evidence.
+- **Pose/tracking overlays** on the live camera view and the uploaded-video results: boxes,
+  skeletons, track IDs and confidence as one SVG layer aligned with the media at any size, each
+  layer toggleable; a per-person timeline in the results; a Pose & tracking card on System Status.
+- **Fall assists from pose and tracking:** deferred pose verification (`FALL_POSE_VERIFICATION`,
+  on by default) and per-person dedupe (`FALL_TRACK_DEDUPE`, off), with
+  `python -m ml.validation.compare_fall_assist` to evaluate them. An immediate veto cut false alerts
+  on the URFD corpus (11 -> 3-4) but lost 2-3 of 10 real falls, so it was not shipped. The deferred
+  form holds an event whose person is still upright for up to 2 s and withholds it only if they stay
+  upright. On 22 clips (11 falls) it caught 11/11 with 7 false alerts, against 9/11 and 17 with
+  verification off. That corpus is far too small to claim a real-world accuracy change (see README).
+- **Uploads in codecs browsers cannot decode now play in the results view.** An upload stored as
+  MPEG-4 Part 2 (common from OpenCV, cameras and public datasets) analysed fine, but its player
+  stayed blank. Analysis now also writes a frame-aligned VP8/H.264 preview, which the stream
+  endpoint serves in its place and which is deleted with the upload.
 - **Trained YOLOv8n fall detector as the primary fall signal.** `ml/exported/fall_detector_v1.pt`
   (single class `Fall`, trained by `ml/detector/`) is committed with its metadata and loaded by
   default; the pose heuristic remains as a reported fallback. Metrics and limitations are in
@@ -58,6 +79,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Analysis results view.** A wider two-column layout: the source video, overlay controls and
+  per-person timeline on the left, fall-event evidence on the right, so the overlay and the evidence
+  for it are visible together. Pose evidence is a readable sentence rather than an all-caps badge,
+  and the event list states that each event is a detector lead for review, not a confirmed fall.
+- **Dialogs** are announced as modal dialogs named by their title, close on Escape, and move focus
+  in on open and back on close.
+- **Event markers** use a coloured status dot from the design tokens instead of emoji, on the
+  dashboard, alerts, recordings and camera pages. Dashboard alert rows now show their source and
+  confidence.
+- **System Status** lays its cards out in two columns on wide screens.
+- **The camera form no longer shows an "Abandoned object" timer.** That detector was removed from
+  the live pipeline, so the field configured nothing. The column remains for compatibility.
 - **Fall clips encode with VP8 instead of VP9** — 4.8x faster to encode, 18% smaller, and 0.27 dB
   apart on PSNR (with a better worst-frame figure), equally playable in every browser targeted.
   Clip encoding runs inline in the upload analyser and was ~70% of its wall clock: a real 29 s
@@ -65,6 +98,28 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- On the live view, a fall event held by pose verification drew its fire-time box where the person
+  *had been* up to 2 s earlier. Its attributed person's current box is drawn instead.
+- Dashboard and analytics charts: axis labels drifted out from under their bars and truncated to
+  `10-…`, an all-zero series rendered as a bare baseline, and a single category filled the whole
+  card as one slab.
+- The navbar wrapped the user name onto two lines at common laptop widths, and labelled the first
+  realtime connection of a page load "Reconnecting".
+- A fall event held by pose verification was stamped with the time it was *released* (up to 2 s
+  late, or the last frame when the video ended), shifting its in-video timestamp, overlay highlight
+  and clip. It is now placed where the detector fired.
+- A held event's clip re-matched the fire-time box against the people visible at release, and could
+  annotate a different person than the event named. It now reuses the event's attribution.
+- `POSE_ESTIMATION_ENABLED=false` also stopped pose on live cameras, silently disabling violence
+  detection, which works from keypoints. The flag now only affects uploaded-video analysis.
+- A second thread could get past model loading while the first was still inside `YOLO(...)`, and
+  run inference against an unloaded model for those frames.
+- **Concurrent first inference on a shared model crashed.** Two threads making their first
+  `predict()` on the same freshly loaded Ultralytics model (two uploads, or a camera and an upload,
+  after a restart) crashed one of them with `'Conv' object has no attribute 'bn'` in 15 of 15
+  trials. Inference on each shared model is now serialized; 0 of 15, no measurable throughput cost.
+- **A model that failed to load stopped detection.** A missing or corrupt pose/object model now
+  disables only what needs it and is reported on System Status, instead of failing every analysis.
 - **Live camera views no longer exhaust the database pool.** `GET /api/cameras/{id}/stream` kept
   its request's database session checked out for the life of the stream, so about 15 concurrent
   views took the whole SQLAlchemy pool and every database-backed endpoint hung. The stream now

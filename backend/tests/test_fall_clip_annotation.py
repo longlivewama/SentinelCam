@@ -131,6 +131,28 @@ def test_whichever_of_the_three_falls_is_the_one_named(faller_index, expected_tr
     assert plan.track_id == expected_track
 
 
+def test_an_event_the_pipeline_already_attributed_keeps_that_person():
+    """An event held by pose verification arrives frames after it fired,
+    carrying the person FallPipeline attributed it to then. Its fire-time
+    box is not re-matched against whoever is near it now: the clip has to
+    draw the same person the event, overlay and record name."""
+    ann = annotator()
+    frames, fall_boxes = build_three_person_scene(ann, faller_index=2)
+
+    # Evidence that, matched afresh, would name track 3 - but the pipeline
+    # named track 1 when the gate fired.
+    plan = ann.plan_for_event(
+        dict(fall_event(fall_boxes[-1]), person_track_id=1), frames[-1], frames[-1] / FPS,
+    )
+    assert plan is not None and plan.track_id == 1
+
+    # Explicitly unattributed: never pinned on a person by re-matching.
+    plan = ann.plan_for_event(
+        dict(fall_event(fall_boxes[-1]), person_track_id=None), frames[-1], frames[-1] / FPS,
+    )
+    assert plan is None or plan.track_id is None
+
+
 def test_the_first_person_in_the_list_is_not_the_default_answer():
     """The cheap wrong implementation - annotate people[0] - would pass
     the faller_index=0 case above and fail here."""
