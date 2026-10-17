@@ -54,15 +54,15 @@ export function formatDateTime(value) {
 export const EVENT_TYPE_META = {
   // "fall" is the product's primary event type; without an entry here it
   // rendered through the fallback below as a bare lowercase "fall" with a
-  // generic bell icon.
-  fall: { label: 'Fall Detected', icon: '\u{1F6A8}', color: 'text-status-error' },
-  violence: { label: 'Violence Detected', icon: '\u{26A0}', color: 'text-status-error' },
-  motion: { label: 'Motion', icon: '\u{1F3C3}', color: 'text-accent-blue' },
-  person: { label: 'Person Detected', icon: '\u{1F9CD}', color: 'text-accent-cyan' },
-  crowd: { label: 'Crowd Detected', icon: '\u{1F465}', color: 'text-status-warn' },
-  abandoned_object: { label: 'Abandoned Object', icon: '\u{1F392}', color: 'text-status-error' },
-  manual: { label: 'Manual', icon: '\u{1F4F9}', color: 'text-slate-300' },
-  scheduled: { label: 'Scheduled', icon: '\u{23F0}', color: 'text-slate-300' },
+  // generic fallback marker.
+  fall: { label: 'Fall Detected', color: 'text-status-error', dot: 'bg-status-error' },
+  violence: { label: 'Violence Detected', color: 'text-status-error', dot: 'bg-status-error' },
+  motion: { label: 'Motion', color: 'text-accent-blue', dot: 'bg-accent-blue' },
+  person: { label: 'Person Detected', color: 'text-accent-cyan', dot: 'bg-accent-cyan' },
+  crowd: { label: 'Crowd Detected', color: 'text-status-warn', dot: 'bg-status-warn' },
+  abandoned_object: { label: 'Abandoned Object', color: 'text-status-error', dot: 'bg-status-error' },
+  manual: { label: 'Manual', color: 'text-slate-300', dot: 'bg-slate-400' },
+  scheduled: { label: 'Scheduled', color: 'text-slate-300', dot: 'bg-slate-400' },
 }
 
 // The event types the detection pipeline actually produces (see the
@@ -77,8 +77,8 @@ export function eventTypeMeta(triggerAction) {
   return (
     EVENT_TYPE_META[key] || {
       label: triggerAction || 'Unknown',
-      icon: '\u{1F514}',
       color: 'text-slate-300',
+      dot: 'bg-slate-400',
     }
   )
 }

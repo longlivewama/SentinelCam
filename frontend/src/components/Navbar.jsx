@@ -62,6 +62,13 @@ export default function Navbar() {
   const unreadCount = useAlertsBadgeStore((s) => s.unreadCount)
   const resetUnread = useAlertsBadgeStore((s) => s.reset)
   const connected = useRealtimeStatus((s) => s.connected)
+  const hasConnected = useRealtimeStatus((s) => s.hasConnected)
+  const connectionLabel = connected ? 'Live' : hasConnected ? 'Reconnecting' : 'Connecting'
+  const connectionTitle = connected
+    ? 'Realtime connection active'
+    : hasConnected
+      ? 'Realtime connection lost - reconnecting…'
+      : 'Connecting to realtime updates…'
 
   const handleLogout = () => {
     logout()
@@ -71,7 +78,7 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-40 border-b border-surface-700 bg-surface-950/90 backdrop-blur">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-8">
+        <div className="flex items-center gap-6">
           <div className="flex items-center gap-2.5">
             <span className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-accent-blue to-accent-cyan shadow-glow">
               <span className="absolute h-2.5 w-2.5 rounded-full bg-surface-950" />
@@ -93,15 +100,17 @@ export default function Navbar() {
         <div className="flex items-center gap-3">
           <span
             className="hidden items-center gap-1.5 text-xs text-slate-500 sm:flex"
-            title={connected ? 'Realtime connection active' : 'Realtime connection lost - reconnecting…'}
+            title={connectionTitle}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-status-ok' : 'bg-status-warn animate-pulse'}`} />
-            {connected ? 'Live' : 'Reconnecting'}
+            {connectionLabel}
           </span>
           {user && (
-            <span className="hidden text-sm text-slate-400 sm:inline">
-              {user.full_name || user.email}
-              <span className="ml-2 sc-badge bg-accent-blue/10 text-accent-blue capitalize">{user.role}</span>
+            <span className="hidden items-center gap-2 whitespace-nowrap text-sm text-slate-400 sm:flex">
+              <span className="hidden max-w-[12rem] truncate xl:inline" title={user.email}>
+                {user.full_name || user.email}
+              </span>
+              <span className="sc-badge bg-accent-blue/10 text-accent-blue capitalize">{user.role}</span>
             </span>
           )}
           <button onClick={handleLogout} className="sc-btn-secondary text-xs">

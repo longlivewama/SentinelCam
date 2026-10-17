@@ -53,12 +53,8 @@ from app.services.detection.annotated_clip_renderer import (
     max_gap_frames_for,
 )
 from app.services.detection.person_tracker import BBox, PersonTracker, suppress_duplicate_boxes
-from app.services.detection.track_fall_association import (
-    SupportLedger,
-    associate,
-    best_overlap,
-    overlap_score,
-)
+from app.services.detection.scene_tracking import SceneTracker
+from app.services.detection.track_fall_association import best_overlap
 
 logger = logging.getLogger(__name__)
 
@@ -128,16 +124,23 @@ class FallClipAnnotator:
         stride: int,
         pre_event_seconds: float,
         post_event_seconds: float,
+        scene: Optional[SceneTracker] = None,
     ):
         self.fps = fps if fps and fps > 0 else 25.0
         self.stride = max(int(stride), 1)
 
-        clip_seconds = pre_event_seconds + post_event_seconds + HISTORY_MARGIN_SECONDS
-        history_length = max(4, int(math.ceil(clip_seconds * self.fps / self.stride)) + 2)
+        self.history_length = self.history_length_for(
+            self.fps, self.stride, pre_event_seconds, post_event_seconds,
+        )
 
-        self._people = PersonTracker(history_length=history_length)
-        self._falls = PersonTracker(history_length=history_length)
-        self._support = SupportLedger()
+        # The person tracker is a SceneTracker's: either the one the fall
+        # pipeline owns (the upload analyser hands it in, so a clip's drawn
+        # id, the event's person_track_id and the overlay all agree), or a
+        # private one when none is given. Its box history must cover the
+        # clip window - see history_length_for.
+        self._scene = scene or SceneTracker(tracker=PersonTracker(history_length=self.history_length))
+        self._people = self._scene.tracker
+        self._falls = PersonTracker(history_length=self.history_length)
         self._max_gap_frames = max_gap_frames_for(self.fps, self.stride)
         self._open_plans: List[AnnotationPlan] = []
 
@@ -162,35 +165,26 @@ class FallClipAnnotator:
         output for the same frame (anything with a `.bbox`). Both were
         computed by the pipeline for its own purposes - this only reads
         them."""
-        # Deduplicated before tracking, never before counting: the
-        # upload's own `persons_detected` figure still comes from the raw
-        # `people` list in video_analysis.py and is unaffected by this.
-        person_boxes = suppress_duplicate_boxes(
-            [tuple(p.bbox) for p in people if getattr(p, "bbox", None) is not None]
-        )
+        # A shared scene has already seen this frame (the fall pipeline
+        # updates it before the analyser gets here); updating it twice
+        # would age every track by a phantom frame. Person boxes are
+        # deduplicated inside the scene before tracking, never before
+        # counting: the upload's `persons_detected` still comes from the
+        # raw `people` list in video_analysis.py.
+        if self._scene.last_frame_index != frame_index:
+            self._scene.update(people, video_time_seconds, frame_index)
+        # Continuity evidence for attribution (idempotent per frame): every
+        # person observed now, scored against every fall box now.
+        self._scene.record_fall_evidence(fall_boxes, frame_index)
+
         fall_bboxes = suppress_duplicate_boxes(
             [tuple(f.bbox) for f in fall_boxes if getattr(f, "bbox", None) is not None]
         )
-
-        person_tracks = self._people.update(person_boxes, video_time_seconds, frame_index)
         fall_tracks = self._falls.update(fall_bboxes, video_time_seconds, frame_index)
 
         self._last_frame_index = frame_index
-        self._person_boxes_now = [(t.track_id, t.bbox) for t in person_tracks]
+        self._person_boxes_now = self._scene.observed_boxes()
         self._fall_boxes_now = [(t.track_id, t.bbox) for t in fall_tracks]
-
-        # Continuity evidence: on every processed frame, score every
-        # person track against every fall box. `associate` weighs this
-        # alongside the firing frame, so a sustained overlap outranks a
-        # coincidental one - and a frame where nobody overlapped still
-        # counts, as a gap in whoever's continuity.
-        frame_scores: dict = {}
-        for _fall_track_id, fall_bbox in self._fall_boxes_now:
-            for person_track_id, person_bbox in self._person_boxes_now:
-                score = overlap_score(fall_bbox, person_bbox)
-                if score > 0:
-                    frame_scores[person_track_id] = max(frame_scores.get(person_track_id, 0.0), score)
-        self._support.record_frame(video_time_seconds, frame_scores)
 
         self._advance_open_plans(frame_index)
 
@@ -225,17 +219,21 @@ class FallClipAnnotator:
         evidence = tuple(float(v) for v in evidence)
         confidence = float(event.get("confidence", 0.0))
 
-        match = associate(
-            evidence,
-            self._person_boxes_now,
-            support_ledger=self._support,
-            video_time_seconds=video_time_seconds,
-            support_window_seconds=self._support_window_for(event),
-        )
+        if "person_track_id" in event:
+            # The pipeline already attributed this event when it fired. A
+            # held event reaches here frames later, and re-attributing its
+            # fire-time box against the people visible NOW could name
+            # someone else - the clip must show the person the event,
+            # its overlay and its record name.
+            attributed = event["person_track_id"]
+            match = None
+        else:
+            match = self._scene.attribute(evidence, event.get("sustained_seconds"))
+            attributed = match.track_id if match is not None else None
 
-        if match is not None:
-            tracker, source_id, track_id = self._people, match.track_id, match.track_id
-            detail = match.as_log_fields()
+        if attributed is not None:
+            tracker, source_id, track_id = self._people, attributed, attributed
+            detail = match.as_log_fields() if match is not None else None
             logger.info(
                 "Fall at %.2fs attributed to person track %s (%s)",
                 video_time_seconds, track_id, detail,
@@ -284,17 +282,14 @@ class FallClipAnnotator:
 
     # -- helpers -----------------------------------------------------------
 
-    def _support_window_for(self, event: dict) -> Optional[float]:
-        """Weigh continuity over the window the gate itself used, so the
-        support term describes the same stretch of footage the event was
-        built from."""
-        sustained = event.get("sustained_seconds")
-        if sustained is None:
-            return None
-        try:
-            return max(float(sustained), 0.0) + 1.0
-        except (TypeError, ValueError):
-            return None
+    @staticmethod
+    def history_length_for(fps: float, stride: int, pre_event_seconds: float, post_event_seconds: float) -> int:
+        """Processed frames of box history a track must keep so an
+        annotation plan can be seeded with the clip's whole pre-event
+        window."""
+        fps = fps if fps and fps > 0 else 25.0
+        clip_seconds = pre_event_seconds + post_event_seconds + HISTORY_MARGIN_SECONDS
+        return max(4, int(math.ceil(clip_seconds * fps / max(int(stride), 1))) + 2)
 
     def _fall_region_track_for(self, evidence: BBox) -> Optional[int]:
         """The fall-region track whose box is the one that just fired."""

@@ -98,3 +98,46 @@ describe('SystemStatus page', () => {
     expect(await screen.findByText(/failed to load system status/i)).toBeInTheDocument()
   })
 })
+
+describe('SystemStatus pose & tracking card', () => {
+  const POSE = {
+    pose_estimation_enabled: true,
+    pose_model: 'yolov8n-pose.pt',
+    pose_model_loaded: true,
+    pose_model_error: null,
+    person_tracking_enabled: true,
+    tracking_max_age_seconds: 1.5,
+    fall_pose_verification: false,
+    fall_track_dedupe: false,
+  }
+
+  beforeEach(() => vi.clearAllMocks())
+
+  it('reports what is enabled, and that the fall assists are off', async () => {
+    apiClient.get.mockResolvedValue({ data: { ...statusPayload(), pose_and_tracking: POSE } })
+    render(<SystemStatus />)
+    const card = await screen.findByTestId('pose-tracking-status')
+    expect(card).toHaveTextContent('Pose estimationEnabled')
+    expect(card).toHaveTextContent('Pose model (yolov8n-pose.pt)Loaded')
+    expect(card).toHaveTextContent('Multi-person trackingEnabled')
+    expect(card).toHaveTextContent('1.5s unseen')
+    expect(card).toHaveTextContent('Pose verification of fall eventsOff')
+  })
+
+  it('surfaces a pose model that failed to load', async () => {
+    apiClient.get.mockResolvedValue({
+      data: { ...statusPayload(), pose_and_tracking: { ...POSE, pose_model_loaded: false, pose_model_error: 'failed to load yolov8n-pose.pt: corrupt' } },
+    })
+    render(<SystemStatus />)
+    const card = await screen.findByTestId('pose-tracking-status')
+    expect(card).toHaveTextContent('Failed to load')
+    expect(card).toHaveTextContent('corrupt')
+  })
+
+  it('stays hidden for a backend that does not report it', async () => {
+    apiClient.get.mockResolvedValue({ data: statusPayload() })
+    render(<SystemStatus />)
+    await screen.findByText(/trained fall detector/i)
+    expect(screen.queryByTestId('pose-tracking-status')).toBeNull()
+  })
+})
